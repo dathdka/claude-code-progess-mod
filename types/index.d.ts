@@ -3,6 +3,6 @@ export type Item = { id: string; label: string; status: TaskStatus }
 
 declare module 'claude-code' {
   interface PluginState {
-    'task-progress': { todos: Item[]; tasks: Item[] }
+    'task-progress': { todos: Item[]; tasks: Item[]; startedAt: number; finishedAt: number }
   }
 }

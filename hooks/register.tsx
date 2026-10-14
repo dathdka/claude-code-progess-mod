@@ -11,6 +11,7 @@ import {
   modeOf,
 } from './knight'
 import type { Mode } from './knight'
+import { timingText } from './progress'
 
 const PANE = 'task-progress'
 const BAR_WIDTH = 24
@@ -20,6 +21,8 @@ let tick = 0
 let lastKey = ''
 
 const todos = atom({ plugin: 'task-progress', key: 'todos' } as const, [] as Item[])
+const startedAt = atom({ plugin: 'task-progress', key: 'startedAt' } as const, 0)
+const finishedAt = atom({ plugin: 'task-progress', key: 'finishedAt' } as const, 0)
 const tasks = atom({ plugin: 'task-progress', key: 'tasks' } as const, [] as Item[])
 
 const summarize = (items: Item[]) => {
@@ -45,6 +48,14 @@ async function refreshStatus($: EngineInterface) {
   const list = [...(await read($, todos)), ...(await read($, tasks))]
   const { done, total, percent } = summarize(list)
   mode = modeOf(list)
+  const now = await $.clock.now()
+  if (total === 0) {
+    await update($, startedAt, () => 0)
+    await update($, finishedAt, () => 0)
+  } else {
+    await update($, startedAt, prev => prev || now)
+    await update($, finishedAt, prev => (done === total ? prev || now : 0))
+  }
   $.ui.status(total === 0 ? undefined : `tasks ${done}/${total} · ${percent}%`)
 }
 
@@ -150,6 +161,11 @@ export const register: Register = on => {
       ) : null
     const items = [...(await read($, todos)), ...(await read($, tasks))]
     const { done, total, percent } = summarize(items)
+    const now = await $.clock.now()
+    const started = await read($, startedAt)
+    const finished = await read($, finishedAt)
+    const elapsed = started === 0 ? 0 : (finished || now) - started
+    const timing = timingText(elapsed, done, total, finished !== 0)
     const room = Math.max(1, (e.viewport?.rows ?? 24) - 6 - KNIGHT_ROWS)
     const active = items.filter(i => i.status === 'in_progress')
     const rest = items.filter(i => i.status !== 'in_progress')
@@ -168,7 +184,7 @@ export const register: Register = on => {
       <Box flexDirection="column">
         {knight}
         <Text bold>
-          {done}/{total} done · {percent}%
+          {done}/{total} done · {percent}%{timing === '' ? '' : ` · ${timing}`}
         </Text>
         <Text color={percent === 100 ? 'green' : 'cyan'}>{bar(percent)}</Text>
         <Text> </Text>

@@ -1,6 +1,7 @@
-import { expect, test } from 'claude-code/testing'
+import { expect, mock, test } from 'claude-code/testing'
 
 test('TodoWrite puts done/total and percent on the status line', async ($, on) => {
+  const clock = mock.clock(on)
   const lines: Array<string | undefined> = []
   on('ui.status', (_$, e) => {
     lines.push(e.text)
@@ -22,6 +23,7 @@ test('TodoWrite puts done/total and percent on the status line', async ($, on) =
 })
 
 test('TaskCreate then TaskUpdate completed gives 100%', async ($, on) => {
+  const clock = mock.clock(on)
   const lines: Array<string | undefined> = []
   on('ui.status', (_$, e) => {
     lines.push(e.text)
@@ -42,6 +44,7 @@ test('TaskCreate then TaskUpdate completed gives 100%', async ($, on) => {
 })
 
 test('the pane shows the progress header and the in-progress item', async ($, on) => {
+  const clock = mock.clock(on)
   on('ui.status', () => ({ value: undefined }))
   on('tool.call', { tool: 'TodoWrite' }, () => ({
     result: { oldTodos: [], newTodos: [] },
@@ -69,5 +72,37 @@ test('the pane shows the progress header and the in-progress item', async ($, on
 
   expect(await ui.find({ type: 'Text', text: /1\/2 done · 50%/ })).toBeDefined()
   expect(await ui.find({ type: 'Text', text: /▶ second/ })).toBeDefined()
+  await ui.unmount()
+})
+
+test('the pane header shows elapsed time and an estimate', async ($, on) => {
+  const clock = mock.clock(on, { now: 1_700_000_000_000 })
+  on('ui.status', () => ({ value: undefined }))
+  on('tool.call', { tool: 'TodoWrite' }, () => ({
+    result: { oldTodos: [], newTodos: [] },
+  }))
+  const todos = (done: number) => [
+    { content: 'a', status: done > 0 ? 'completed' : 'in_progress', activeForm: 'A' },
+    { content: 'b', status: 'pending', activeForm: 'B' },
+  ] as const
+
+  await $.tool.call({ tool: 'TodoWrite', todos: [...todos(0)] })
+  await clock.advance(10 * 60_000)
+  await $.tool.call({ tool: 'TodoWrite', todos: [...todos(1)] })
+
+  const ui = await $.ui.mount({
+    plugin: 'task-progress',
+    surface: 'terminal',
+    component: 'Pane',
+    props: {
+      title: 'Task progress',
+      isFocused: true,
+      bodyColumns: 80,
+      placement: 'dock',
+    } as never,
+    requestId: 'task-progress',
+  })
+
+  expect(await ui.find({ type: 'Text', text: /1\/2 done · 50% · 10m · ~10m left/ })).toBeDefined()
   await ui.unmount()
 })
