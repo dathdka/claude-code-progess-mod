@@ -14,6 +14,8 @@ import type { Mode } from './knight'
 import { timingText } from './progress'
 
 const PANE = 'task-progress'
+const PROGRESS_TOOL = 'mcp__task-progress__progress'
+const STATUSES: readonly TaskStatus[] = ['pending', 'in_progress', 'completed']
 const BAR_WIDTH = 24
 
 let mode: Mode = 'idle'
@@ -36,6 +38,19 @@ const bar = (percent: number) => {
   const filled = Math.round((percent / 100) * BAR_WIDTH)
 
   return '█'.repeat(filled) + '░'.repeat(BAR_WIDTH - filled)
+}
+
+function parseProgressInput(raw: unknown): Item[] | undefined {
+  if (!Array.isArray(raw)) return undefined
+  const items: Item[] = []
+  for (const [index, entry] of raw.entries()) {
+    const subject = (entry as { subject?: unknown } | null)?.subject
+    const status = (entry as { status?: unknown } | null)?.status
+    if (typeof subject !== 'string' || !STATUSES.includes(status as TaskStatus)) return undefined
+    items.push({ id: String(index), label: subject, status: status as TaskStatus })
+  }
+
+  return items
 }
 
 const mark = (status: TaskStatus) =>
@@ -66,6 +81,29 @@ export const register: Register = on => {
       description: 'Show the task progress pane (todo/task list, percent done)',
     })
     void $.ui.open({ id: PANE, title: 'Task progress' })
+    await $.tool.register({
+      name: 'progress',
+      description:
+        'Shows the task list and progress in the user\'s task-progress pane. For any work of 2+ steps, call this first with the full ordered list, then again whenever a step starts (in_progress) or finishes (completed). Each call replaces the whole list. Keep exactly one task in_progress.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          tasks: {
+            type: 'array',
+            items: {
+              type: 'object',
+              properties: {
+                subject: { type: 'string' },
+                status: { type: 'string', enum: ['pending', 'in_progress', 'completed'] },
+              },
+              required: ['subject', 'status'],
+            },
+          },
+        },
+        required: ['tasks'],
+      },
+      isDeferred: false,
+    })
     $.clock.every(FRAME_MS, () => {
       tick += 1
       const key = frameKey(mode, tick)
@@ -82,6 +120,18 @@ export const register: Register = on => {
 
     return { text: 'Task progress pane opened.' }
   })
+
+  on('tool.call', { tool: PROGRESS_TOOL }, async ($, e) => {
+    const items = parseProgressInput(e.tasks)
+    if (items === undefined) {
+      return { deny: 'tasks must be an array of { subject, status: pending | in_progress | completed }' }
+    }
+    await update($, todos, () => items)
+    await refreshStatus($)
+    const { done, total } = summarize(items)
+
+    return { result: `Progress updated: ${done}/${total} done` }
+  }).catch((_$, e, next) => next(e))
 
   on('tool.call', { tool: 'TodoWrite' }, async ($, e, next) => {
     const ran = await next(e)

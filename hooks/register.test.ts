@@ -106,3 +106,37 @@ test('the pane header shows elapsed time and an estimate', async ($, on) => {
   expect(await ui.find({ type: 'Text', text: /1\/2 done · 50% · 10m · ~10m left/ })).toBeDefined()
   await ui.unmount()
 })
+
+test('the progress tool fills the list and answers the model', async ($, on) => {
+  mock.clock(on, { now: 1_700_000_000_000 })
+  const lines: Array<string | undefined> = []
+  on('ui.status', (_$, e) => {
+    lines.push(e.text)
+    return { value: undefined }
+  })
+
+  const ran = await $.tool.call({
+    tool: 'mcp__task-progress__progress',
+    tasks: [
+      { subject: 'a', status: 'completed' },
+      { subject: 'b', status: 'in_progress' },
+      { subject: 'c', status: 'pending' },
+    ],
+  } as never)
+
+  expect(lines).toContain('tasks 1/3 · 33%')
+  // the engine validates a tool's result as string | array | undefined
+  expect(ran.result).toBe('Progress updated: 1/3 done')
+})
+
+test('the progress tool refuses a malformed list', async ($, on) => {
+  mock.clock(on, { now: 1_700_000_000_000 })
+  on('ui.status', () => ({ value: undefined }))
+
+  const ran = await $.tool.call({
+    tool: 'mcp__task-progress__progress',
+    tasks: [{ subject: 'a', status: 'bogus' }],
+  } as never)
+
+  expect(JSON.stringify(ran)).toContain('tasks must be an array')
+})
