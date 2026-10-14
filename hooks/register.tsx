@@ -2,9 +2,22 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
 import type { Item, TaskStatus } from '../types'
+import {
+  FRAME_MS,
+  KNIGHT_COLUMNS,
+  KNIGHT_ROWS,
+  frameKey,
+  knightCells,
+  modeOf,
+} from './knight'
+import type { Mode } from './knight'
 
 const PANE = 'task-progress'
 const BAR_WIDTH = 24
+
+let mode: Mode = 'idle'
+let tick = 0
+let lastKey = ''
 
 const todos = atom({ plugin: 'task-progress', key: 'todos' } as const, [] as Item[])
 const tasks = atom({ plugin: 'task-progress', key: 'tasks' } as const, [] as Item[])
@@ -31,6 +44,7 @@ const isOk = (ran: { deny?: string; isError?: boolean }) =>
 async function refreshStatus($: EngineInterface) {
   const list = [...(await read($, todos)), ...(await read($, tasks))]
   const { done, total, percent } = summarize(list)
+  mode = modeOf(list)
   $.ui.status(total === 0 ? undefined : `tasks ${done}/${total} · ${percent}%`)
 }
 
@@ -41,6 +55,13 @@ export const register: Register = on => {
       description: 'Show the task progress pane (todo/task list, percent done)',
     })
     void $.ui.open({ id: PANE, title: 'Task progress' })
+    $.clock.every(FRAME_MS, () => {
+      tick += 1
+      const key = frameKey(mode, tick)
+      if (key === lastKey) return
+      lastKey = key
+      void $.ui.blit({ requestId: PANE, key: 'knight', cells: knightCells(mode, tick) })
+    })
 
     return next(e)
   })
@@ -116,20 +137,36 @@ export const register: Register = on => {
   }).catch((_$, e, next) => next(e))
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
-    const { Box, Text } = $.ui.resolve(e)
+    const ui = $.ui.resolve(e)
+    const { Box, Text } = ui
+    const knight =
+      e.surface === 'terminal' && 'Raster' in ui ? (
+        <ui.Raster
+          key="knight"
+          columns={KNIGHT_COLUMNS}
+          rows={KNIGHT_ROWS}
+          cells={knightCells(mode, tick)}
+        />
+      ) : null
     const items = [...(await read($, todos)), ...(await read($, tasks))]
     const { done, total, percent } = summarize(items)
-    const room = Math.max(1, (e.viewport?.rows ?? 24) - 6)
+    const room = Math.max(1, (e.viewport?.rows ?? 24) - 6 - KNIGHT_ROWS)
     const active = items.filter(i => i.status === 'in_progress')
     const rest = items.filter(i => i.status !== 'in_progress')
     const shown = [...active, ...rest].slice(0, room)
 
     if (total === 0) {
-      return <Text dimColor>No tasks yet. They appear when Claude plans work.</Text>
+      return (
+        <Box flexDirection="column">
+          {knight}
+          <Text dimColor>No tasks yet. They appear when Claude plans work.</Text>
+        </Box>
+      )
     }
 
     return (
       <Box flexDirection="column">
+        {knight}
         <Text bold>
           {done}/{total} done · {percent}%
         </Text>
