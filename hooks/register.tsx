@@ -13,6 +13,7 @@ import {
   stageCells,
 } from './stage'
 import { timingText } from './progress'
+import { playerCommands, soundPath, wasCutByCap } from './sound'
 import { COLORS, barParts, truncate } from './style'
 
 const PANE = 'task-progress'
@@ -20,8 +21,15 @@ const PROGRESS_TOOL = 'mcp__task-progress__progress'
 const STATUSES: readonly TaskStatus[] = ['pending', 'in_progress', 'completed']
 const CARD_PADDING = 1
 const DEFAULT_COLUMNS = 24
+const DEFAULT_SOUND_SECONDS = 12
+const MIN_SOUND_SECONDS = 1
+const MAX_SOUND_SECONDS = 120
 
 let isBusy = false
+let isSoundOn = true
+let customSound = ''
+let soundMs = DEFAULT_SOUND_SECONDS * 1000
+let hasChimed = false
 let isDone = false
 let tick = 0
 let lastKey = ''
@@ -58,10 +66,33 @@ const mark = (status: TaskStatus) =>
 const isOk = (ran: { deny?: string; isError?: boolean }) =>
   ran.deny === undefined && ran.isError !== true
 
+async function playDone($: EngineInterface, file: string, maxMs: number): Promise<void> {
+  try {
+    for (const argv of playerCommands(file)) {
+      const started = await $.clock.now()
+      try {
+        const { exitCode } = await $.process.run(argv, { timeoutMs: maxMs })
+        if (exitCode === 0) return
+      } catch {
+        // either this player is not installed, or the cap cut a long clip short
+        if (wasCutByCap(started, await $.clock.now(), maxMs)) return
+      }
+    }
+    $.ui.log('task-progress: no audio player could play the completion sound', { to: 'debug' })
+  } catch {
+    // a sound is a side effect: it must never throw into the session
+  }
+}
+
 async function refreshStatus($: EngineInterface) {
   const list = [...(await read($, todos)), ...(await read($, tasks))]
   const { done, total, percent } = summarize(list)
   isDone = isAllDone(list)
+  if (!isDone) hasChimed = false
+  if (isDone && !hasChimed) {
+    hasChimed = true
+    if (isSoundOn) void playDone($, soundPath($.plugin.root, customSound), soundMs)
+  }
   const now = await $.clock.now()
   if (total === 0) {
     await update($, startedAt, () => 0)
@@ -73,7 +104,12 @@ async function refreshStatus($: EngineInterface) {
   $.ui.status(total === 0 ? undefined : `tasks ${done}/${total} · ${percent}%`)
 }
 
-export const register: Register = on => {
+export const register: Register = (on, options) => {
+  isSoundOn = options.isSoundOn !== false
+  customSound = typeof options.soundFile === 'string' ? options.soundFile : ''
+  const seconds = typeof options.maxSeconds === 'number' ? options.maxSeconds : DEFAULT_SOUND_SECONDS
+  soundMs = Math.min(MAX_SOUND_SECONDS, Math.max(MIN_SOUND_SECONDS, seconds)) * 1000
+
   on('session.start', async ($, e, next) => {
     await $.command.register({
       name: 'task-progress',

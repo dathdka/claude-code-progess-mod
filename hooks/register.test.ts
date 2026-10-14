@@ -174,3 +174,90 @@ test('the stage sings while a turn runs and rests when it ends', async ($, on) =
   expect(await cells()).toBe(stageCells('idle', 0, 70))
   await ui.unmount()
 })
+
+/** The jingle starts unawaited (it must not hold up the tool result): let it run before asserting. */
+const settle = async (clock: { advance: (ms: number) => Promise<void> }) => {
+  for (let i = 0; i < 20; i += 1) await clock.advance(0)
+}
+
+const OK_RUN = {
+  exitCode: 0,
+  stdout: '',
+  stderr: '',
+  isStdoutTruncated: false,
+  isStderrTruncated: false,
+}
+
+const ALL_DONE = [
+  { content: 'a', status: 'completed', activeForm: 'A' },
+  { content: 'b', status: 'completed', activeForm: 'B' },
+] as const
+const NOT_DONE = [
+  { content: 'a', status: 'completed', activeForm: 'A' },
+  { content: 'b', status: 'in_progress', activeForm: 'B' },
+] as const
+
+test('the jingle plays once when every task is done, falling back past a missing player', async ($, on) => {
+  const clock = mock.clock(on, { now: 1_700_000_000_000 })
+  const played: string[][] = []
+  on('ui.status', () => ({ value: undefined }))
+  on('ui.log', () => ({ value: undefined }))
+  on('tool.call', { tool: 'TodoWrite' }, () => ({ result: { oldTodos: [], newTodos: [] } }))
+  on('process.run', (_$, e) => {
+    played.push([...e.argv])
+    if (e.argv[0] === 'afplay') throw new Error('not installed')
+
+    return { value: OK_RUN }
+  })
+
+  await $.tool.call({ tool: 'TodoWrite', todos: [...NOT_DONE] })
+  await settle(clock)
+  expect(played).toHaveLength(0)
+
+  await $.tool.call({ tool: 'TodoWrite', todos: [...ALL_DONE] })
+  await settle(clock)
+  expect(played.map(argv => argv[0])).toEqual(['afplay', 'pw-play'])
+  expect(played[1]?.at(-1)).toMatch(/sounds\/done\.wav$/)
+
+  await $.tool.call({ tool: 'TodoWrite', todos: [...ALL_DONE] })
+  await settle(clock)
+  expect(played).toHaveLength(2)
+
+  await $.tool.call({ tool: 'TodoWrite', todos: [...NOT_DONE] })
+  await settle(clock)
+  await $.tool.call({ tool: 'TodoWrite', todos: [...ALL_DONE] })
+  await settle(clock)
+  expect(played).toHaveLength(4)
+})
+
+test('no sound when the option is off', { options: { isSoundOn: false } }, async ($, on) => {
+  const clock = mock.clock(on, { now: 1_700_000_000_000 })
+  let calls = 0
+  on('ui.status', () => ({ value: undefined }))
+  on('tool.call', { tool: 'TodoWrite' }, () => ({ result: { oldTodos: [], newTodos: [] } }))
+  on('process.run', () => {
+    calls += 1
+
+    return { value: OK_RUN }
+  })
+
+  await $.tool.call({ tool: 'TodoWrite', todos: [...ALL_DONE] })
+  await settle(clock)
+  expect(calls).toBe(0)
+})
+
+test('own sound file is played when set', { options: { soundFile: '/home/me/song.mp3' } }, async ($, on) => {
+  const clock = mock.clock(on, { now: 1_700_000_000_000 })
+  const files: string[] = []
+  on('ui.status', () => ({ value: undefined }))
+  on('tool.call', { tool: 'TodoWrite' }, () => ({ result: { oldTodos: [], newTodos: [] } }))
+  on('process.run', (_$, e) => {
+    files.push(e.argv.at(-1) ?? '')
+
+    return { value: OK_RUN }
+  })
+
+  await $.tool.call({ tool: 'TodoWrite', todos: [...ALL_DONE] })
+  await settle(clock)
+  expect(files).toEqual(['/home/me/song.mp3'])
+})

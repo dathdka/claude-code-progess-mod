@@ -9,6 +9,14 @@ Claude Code mod: a pane that tracks the session's todo/task list with a progress
 
 The pane shows done/total, percent, elapsed time and an ETA, plus a pixel-art singer portrait that sings (mouth moves, notes float) while Claude Code is working and celebrates when all tasks are done.
 
+## Completion sound
+
+When every task in the list is completed, a short jingle plays once (`sounds/done.wav`). It uses the first player that works: `afplay` (macOS), then `pw-play`, `paplay`, `aplay`, `ffplay`. Options (`/config` or `pluginConfigs`):
+
+- `isSoundOn` (default on)
+- `soundFile`: absolute path to your own audio file instead of the bundled jingle
+- `maxSeconds` (default 12, 1-120): a longer clip is cut after this many seconds
+
 ## Run from this folder
 
 ```

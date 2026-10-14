@@ -1,6 +1,26 @@
 {
   "name": "task-progress",
-  "version": "0.4.0",
+  "version": "0.5.1",
   "description": "Pane tracking the session's todo/task list with a progress bar and percent done",
-  "types": "./types/index.d.ts"
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "isSoundOn": {
+      "type": "boolean",
+      "title": "Play a sound when all tasks are done",
+      "description": "Plays a short jingle once every task in the list is completed.",
+      "default": true
+    },
+    "soundFile": {
+      "type": "string",
+      "title": "Sound file",
+      "description": "Absolute path to your own audio file (wav/mp3/ogg). Empty uses the bundled jingle.",
+      "default": ""
+    },
+    "maxSeconds": {
+      "type": "number",
+      "title": "Max sound length (seconds)",
+      "description": "A longer clip is cut after this many seconds (1-120).",
+      "default": 12
+    }
+  }
 }
