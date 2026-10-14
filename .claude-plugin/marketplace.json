@@ -1,0 +1,5 @@
+{
+  "name": "task-progress-mods",
+  "owner": { "name": "dathdka" },
+  "plugins": [{ "name": "task-progress", "source": "./" }]
+}

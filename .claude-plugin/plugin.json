@@ -1,0 +1,6 @@
+{
+  "name": "task-progress",
+  "version": "0.1.0",
+  "description": "Pane tracking the session's todo/task list with a progress bar and percent done",
+  "types": "./types/index.d.ts"
+}
