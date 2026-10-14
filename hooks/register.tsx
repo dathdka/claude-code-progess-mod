@@ -4,23 +4,31 @@ import type { EngineInterface, Register } from 'claude-code'
 import type { Item, TaskStatus } from '../types'
 import {
   FRAME_MS,
-  KNIGHT_COLUMNS,
   KNIGHT_ROWS,
+  MAX_COLUMNS,
+  MIN_COLUMNS,
   frameKey,
   knightCells,
+  knightTarget,
   modeOf,
+  stepX,
 } from './knight'
 import type { Mode } from './knight'
 import { timingText } from './progress'
+import { COLORS, barParts, truncate } from './style'
 
 const PANE = 'task-progress'
 const PROGRESS_TOOL = 'mcp__task-progress__progress'
 const STATUSES: readonly TaskStatus[] = ['pending', 'in_progress', 'completed']
-const BAR_WIDTH = 24
+const CARD_PADDING = 1
+const DEFAULT_COLUMNS = 24
 
 let mode: Mode = 'idle'
 let tick = 0
 let lastKey = ''
+let columns = DEFAULT_COLUMNS
+let percentNow = 0
+let knightX = 0
 
 const todos = atom({ plugin: 'task-progress', key: 'todos' } as const, [] as Item[])
 const startedAt = atom({ plugin: 'task-progress', key: 'startedAt' } as const, 0)
@@ -32,12 +40,6 @@ const summarize = (items: Item[]) => {
   const percent = items.length === 0 ? 0 : Math.round((done / items.length) * 100)
 
   return { done, total: items.length, percent }
-}
-
-const bar = (percent: number) => {
-  const filled = Math.round((percent / 100) * BAR_WIDTH)
-
-  return '█'.repeat(filled) + '░'.repeat(BAR_WIDTH - filled)
 }
 
 function parseProgressInput(raw: unknown): Item[] | undefined {
@@ -63,6 +65,7 @@ async function refreshStatus($: EngineInterface) {
   const list = [...(await read($, todos)), ...(await read($, tasks))]
   const { done, total, percent } = summarize(list)
   mode = modeOf(list)
+  percentNow = percent
   const now = await $.clock.now()
   if (total === 0) {
     await update($, startedAt, () => 0)
@@ -106,10 +109,18 @@ export const register: Register = on => {
     })
     $.clock.every(FRAME_MS, () => {
       tick += 1
-      const key = frameKey(mode, tick)
+      const target = knightTarget(columns, percentNow)
+      knightX = stepX(knightX, target)
+      const shown: Mode = knightX === target ? mode : 'run'
+      const key = frameKey(shown, tick, columns, knightX)
       if (key === lastKey) return
       lastKey = key
-      void $.ui.blit({ requestId: PANE, key: 'knight', cells: knightCells(mode, tick) })
+      void $.ui.blit({
+        requestId: PANE,
+        key: 'knight',
+        columns,
+        cells: knightCells(shown, tick, columns, knightX),
+      })
     })
 
     return next(e)
@@ -200,15 +211,6 @@ export const register: Register = on => {
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     const ui = $.ui.resolve(e)
     const { Box, Text } = ui
-    const knight =
-      e.surface === 'terminal' && 'Raster' in ui ? (
-        <ui.Raster
-          key="knight"
-          columns={KNIGHT_COLUMNS}
-          rows={KNIGHT_ROWS}
-          cells={knightCells(mode, tick)}
-        />
-      ) : null
     const items = [...(await read($, todos)), ...(await read($, tasks))]
     const { done, total, percent } = summarize(items)
     const now = await $.clock.now()
@@ -216,39 +218,86 @@ export const register: Register = on => {
     const finished = await read($, finishedAt)
     const elapsed = started === 0 ? 0 : (finished || now) - started
     const timing = timingText(elapsed, done, total, finished !== 0)
-    const room = Math.max(1, (e.viewport?.rows ?? 24) - 6 - KNIGHT_ROWS)
-    const active = items.filter(i => i.status === 'in_progress')
-    const rest = items.filter(i => i.status !== 'in_progress')
-    const shown = [...active, ...rest].slice(0, room)
 
-    if (total === 0) {
-      return (
-        <Box flexDirection="column">
-          {knight}
-          <Text dimColor>No tasks yet. They appear when Claude plans work.</Text>
-        </Box>
-      )
-    }
+    const inner = Math.min(
+      MAX_COLUMNS,
+      Math.max(MIN_COLUMNS, (e.props.bodyColumns ?? DEFAULT_COLUMNS + 2 * CARD_PADDING) - 2 * CARD_PADDING),
+    )
+    columns = inner
+    mode = modeOf(items)
+    percentNow = percent
+    knightX = Math.min(knightX, knightTarget(inner, percent))
+    const shown: Mode = knightX === knightTarget(inner, percent) ? mode : 'run'
+    const knight =
+      e.surface === 'terminal' && 'Raster' in ui ? (
+        <ui.Raster
+          key="knight"
+          columns={inner}
+          rows={KNIGHT_ROWS}
+          cells={knightCells(shown, tick, inner, knightX)}
+        />
+      ) : null
+
+    const room = Math.max(1, (e.viewport?.rows ?? 24) - 7 - KNIGHT_ROWS)
+    const shownItems = [
+      ...items.filter(i => i.status === 'in_progress'),
+      ...items.filter(i => i.status !== 'in_progress'),
+    ].slice(0, room)
+    const { filled, rest } = barParts(percent, inner)
+    const accent = percent === 100 ? COLORS.success : COLORS.accent
+    const height = e.viewport?.rows === undefined ? undefined : Math.max(1, e.viewport.rows - 1)
 
     return (
-      <Box flexDirection="column">
+      <Box
+        flexDirection="column"
+        paddingX={CARD_PADDING}
+        paddingY={CARD_PADDING}
+        backgroundColor={COLORS.card}
+        height={height}
+      >
         {knight}
-        <Text bold>
-          {done}/{total} done · {percent}%{timing === '' ? '' : ` · ${timing}`}
+        <Text>
+          <Text color={accent}>{filled}</Text>
+          <Text color={COLORS.track}>{rest}</Text>
         </Text>
-        <Text color={percent === 100 ? 'green' : 'cyan'}>{bar(percent)}</Text>
-        <Text> </Text>
-        {shown.map(i => (
-          <Text
-            bold={i.status === 'in_progress'}
-            color={i.status === 'in_progress' ? 'yellow' : undefined}
-            dimColor={i.status === 'completed'}
-          >
-            {mark(i.status)} {i.label}
-          </Text>
-        ))}
-        {items.length > shown.length && (
-          <Text dimColor>… +{items.length - shown.length} more</Text>
+        {total === 0 ? (
+          <Text color={COLORS.muted}>No tasks yet. They appear when Claude plans work.</Text>
+        ) : (
+          <Box flexDirection="column">
+            <Text>
+              <Text bold color={accent}>
+                {percent}%
+              </Text>
+              <Text color={COLORS.muted}>
+                {'  '}
+                {done}/{total} tasks
+              </Text>
+            </Text>
+            {timing !== '' && <Text color={COLORS.muted}>{timing}</Text>}
+            <Text> </Text>
+            {shownItems.map(i => (
+              <Text>
+                <Text color={i.status === 'completed' ? COLORS.success : COLORS.muted}>
+                  {mark(i.status)}{' '}
+                </Text>
+                <Text
+                  bold={i.status === 'in_progress'}
+                  color={
+                    i.status === 'in_progress'
+                      ? COLORS.active
+                      : i.status === 'completed'
+                        ? COLORS.doneText
+                        : COLORS.text
+                  }
+                >
+                  {truncate(i.label, inner - 2)}
+                </Text>
+              </Text>
+            ))}
+            {items.length > shownItems.length && (
+              <Text color={COLORS.muted}>… +{items.length - shownItems.length} more</Text>
+            )}
+          </Box>
         )}
       </Box>
     )

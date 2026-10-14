@@ -70,8 +70,9 @@ test('the pane shows the progress header and the in-progress item', async ($, on
     requestId: 'task-progress',
   })
 
-  expect(await ui.find({ type: 'Text', text: /1\/2 done · 50%/ })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: /▶ second/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /50%/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /1\/2 tasks/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /second/ })).toBeDefined()
   await ui.unmount()
 })
 
@@ -103,7 +104,7 @@ test('the pane header shows elapsed time and an estimate', async ($, on) => {
     requestId: 'task-progress',
   })
 
-  expect(await ui.find({ type: 'Text', text: /1\/2 done · 50% · 10m · ~10m left/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /^10m · ~10m left$/ })).toBeDefined()
   await ui.unmount()
 })
 
