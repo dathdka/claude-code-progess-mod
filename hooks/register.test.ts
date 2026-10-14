@@ -1,5 +1,7 @@
 import { expect, mock, test } from 'claude-code/testing'
 
+import { stageCells } from './stage'
+
 test('TodoWrite puts done/total and percent on the status line', async ($, on) => {
   const clock = mock.clock(on)
   const lines: Array<string | undefined> = []
@@ -140,4 +142,35 @@ test('the progress tool refuses a malformed list', async ($, on) => {
   } as never)
 
   expect(JSON.stringify(ran)).toContain('tasks must be an array')
+})
+
+test('the stage sings while a turn runs and rests when it ends', async ($, on) => {
+  mock.clock(on, { now: 1_700_000_000_000 })
+  on('ui.status', () => ({ value: undefined }))
+  on('turn.start', () => ({ turnId: 't1' }))
+  on('turn.complete', () => ({ text: 'done' }))
+
+  const ui = await $.ui.mount({
+    plugin: 'task-progress',
+    surface: 'terminal',
+    component: 'Pane',
+    props: {
+      title: 'Task progress',
+      isFocused: true,
+      bodyColumns: 80,
+      placement: 'dock',
+    } as never,
+    requestId: 'task-progress',
+  })
+  const cells = async () => (await ui.find({ type: 'Raster' }))?.props.cells
+  expect(await cells()).toBe(stageCells('idle', 0, 70))
+
+  await $.turn.start({ text: 'go', turnId: 't1' })
+  await ui.redraw()
+  expect(await cells()).toBe(stageCells('sing', 0, 70))
+
+  await $.turn.complete({ answer: 'ok', durationMs: 5, isAborted: false, turnId: 't1', reason: 'answer' } as never)
+  await ui.redraw()
+  expect(await cells()).toBe(stageCells('idle', 0, 70))
+  await ui.unmount()
 })

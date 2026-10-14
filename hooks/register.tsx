@@ -4,16 +4,14 @@ import type { EngineInterface, Register } from 'claude-code'
 import type { Item, TaskStatus } from '../types'
 import {
   FRAME_MS,
-  KNIGHT_ROWS,
   MAX_COLUMNS,
   MIN_COLUMNS,
+  STAGE_ROWS,
   frameKey,
-  knightCells,
-  knightTarget,
+  isAllDone,
   modeOf,
-  stepX,
-} from './knight'
-import type { Mode } from './knight'
+  stageCells,
+} from './stage'
 import { timingText } from './progress'
 import { COLORS, barParts, truncate } from './style'
 
@@ -23,12 +21,11 @@ const STATUSES: readonly TaskStatus[] = ['pending', 'in_progress', 'completed']
 const CARD_PADDING = 1
 const DEFAULT_COLUMNS = 24
 
-let mode: Mode = 'idle'
+let isBusy = false
+let isDone = false
 let tick = 0
 let lastKey = ''
 let columns = DEFAULT_COLUMNS
-let percentNow = 0
-let knightX = 0
 
 const todos = atom({ plugin: 'task-progress', key: 'todos' } as const, [] as Item[])
 const startedAt = atom({ plugin: 'task-progress', key: 'startedAt' } as const, 0)
@@ -64,8 +61,7 @@ const isOk = (ran: { deny?: string; isError?: boolean }) =>
 async function refreshStatus($: EngineInterface) {
   const list = [...(await read($, todos)), ...(await read($, tasks))]
   const { done, total, percent } = summarize(list)
-  mode = modeOf(list)
-  percentNow = percent
+  isDone = isAllDone(list)
   const now = await $.clock.now()
   if (total === 0) {
     await update($, startedAt, () => 0)
@@ -109,22 +105,32 @@ export const register: Register = on => {
     })
     $.clock.every(FRAME_MS, () => {
       tick += 1
-      const target = knightTarget(columns, percentNow)
-      knightX = stepX(knightX, target)
-      const shown: Mode = knightX === target ? mode : 'run'
-      const key = frameKey(shown, tick, columns, knightX)
+      const mode = modeOf(isBusy, isDone)
+      const key = frameKey(mode, tick, columns)
       if (key === lastKey) return
       lastKey = key
       void $.ui.blit({
         requestId: PANE,
-        key: 'knight',
+        key: 'stage',
         columns,
-        cells: knightCells(shown, tick, columns, knightX),
+        cells: stageCells(mode, tick, columns),
       })
     })
 
     return next(e)
   })
+
+  on('turn.start', ($, e, next) => {
+    if (e.agentId === undefined) isBusy = true
+
+    return next(e)
+  }).catch((_$, e, next) => next(e))
+
+  on('turn.complete', ($, e, next) => {
+    if (e.agentId === undefined) isBusy = false
+
+    return next(e)
+  }).catch((_$, e, next) => next(e))
 
   on('command.run', { command: 'task-progress' }, async $ => {
     await $.ui.open({ id: PANE, title: 'Task progress' })
@@ -224,21 +230,14 @@ export const register: Register = on => {
       Math.max(MIN_COLUMNS, (e.props.bodyColumns ?? DEFAULT_COLUMNS + 2 * CARD_PADDING) - 2 * CARD_PADDING),
     )
     columns = inner
-    mode = modeOf(items)
-    percentNow = percent
-    knightX = Math.min(knightX, knightTarget(inner, percent))
-    const shown: Mode = knightX === knightTarget(inner, percent) ? mode : 'run'
-    const knight =
-      e.surface === 'terminal' && 'Raster' in ui ? (
-        <ui.Raster
-          key="knight"
-          columns={inner}
-          rows={KNIGHT_ROWS}
-          cells={knightCells(shown, tick, inner, knightX)}
-        />
-      ) : null
+    isDone = isAllDone(items)
+    const mode = modeOf(isBusy, isDone)
+    const hasStage = e.surface === 'terminal' && 'Raster' in ui && (e.viewport?.rows ?? 99) >= STAGE_ROWS + 8
+    const stage = hasStage ? (
+      <ui.Raster key="stage" columns={inner} rows={STAGE_ROWS} cells={stageCells(mode, tick, inner)} />
+    ) : null
 
-    const room = Math.max(1, (e.viewport?.rows ?? 24) - 7 - KNIGHT_ROWS)
+    const room = Math.max(1, (e.viewport?.rows ?? 24) - 7 - (hasStage ? STAGE_ROWS : 0))
     const shownItems = [
       ...items.filter(i => i.status === 'in_progress'),
       ...items.filter(i => i.status !== 'in_progress'),
@@ -255,7 +254,7 @@ export const register: Register = on => {
         backgroundColor={COLORS.card}
         height={height}
       >
-        {knight}
+        {stage}
         <Text>
           <Text color={accent}>{filled}</Text>
           <Text color={COLORS.track}>{rest}</Text>

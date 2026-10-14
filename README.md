@@ -7,7 +7,7 @@ Claude Code mod: a pane that tracks the session's todo/task list with a progress
 - Claude's `TodoWrite` and `TaskCreate`/`TaskUpdate`/`TaskList` calls are picked up automatically.
 - The mod also registers its own tool, `mcp__task-progress__progress`, so the pane works in sessions without those tools. The model sends the full list `{ tasks: [{ subject, status }] }` at the start of multi-step work and again when a step starts or finishes.
 
-The pane shows done/total, percent, elapsed time and an ETA, plus a pixel knight that runs while a task is `in_progress`.
+The pane shows done/total, percent, elapsed time and an ETA, plus a pixel-art singer portrait that sings (mouth moves, notes float) while Claude Code is working and celebrates when all tasks are done.
 
 ## Run from this folder
 
