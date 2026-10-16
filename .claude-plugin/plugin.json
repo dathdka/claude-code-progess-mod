@@ -1,6 +1,6 @@
 {
   "name": "task-progress",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "description": "Pane tracking the session's todo/task list with a progress bar, percent done and a citadel scene whose windows light as tasks finish",
   "types": "./types/index.d.ts",
   "userConfig": {
@@ -27,6 +27,12 @@
       "title": "Play a sound when another session starts waiting for you",
       "description": "Plays the same jingle once each time another session goes from busy to idle.",
       "default": false
+    },
+    "isContextWarningOn": {
+      "type": "boolean",
+      "title": "Warn when the context or a quota window is nearly full",
+      "description": "A toast when the context passes 80% (once per crossing) and when the 5h or 7d quota passes 90% (once per window).",
+      "default": true
     }
   }
 }

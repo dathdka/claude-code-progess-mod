@@ -333,7 +333,7 @@ const HOME = '/home/me'
 const ROOT = `${HOME}/.claude`
 const SELF = 'me-1'
 
-type Disk = { files: Map<string, string>; mtimes: Map<string, number>; removed: string[]; played: string[][]; chmods: string[][]; sessionId: string; isChmodBroken: boolean; isBroken: boolean; put: (path: string, text: string, mtimeMs?: number) => void }
+type Disk = { files: Map<string, string>; mtimes: Map<string, number>; removed: string[]; played: string[][]; git: string[][]; gitGate: Promise<void> | undefined; gitReply: (argv: readonly string[]) => { exitCode: number; stdout: string; isStdoutTruncated?: boolean }; chmods: string[][]; sessionId: string; isChmodBroken: boolean; isBroken: boolean; put: (path: string, text: string, mtimeMs?: number) => void }
 
 const NOW = 1_700_000_000_000
 const POLL_MS = 3000
@@ -347,6 +347,9 @@ function mockDisk(on: On, env: Record<string, string> = { HOME }): Disk {
     mtimes,
     removed: [],
     played: [],
+    git: [],
+    gitGate: undefined,
+    gitReply: () => ({ exitCode: 128, stdout: '' }),
     chmods: [],
     sessionId: SELF,
     isChmodBroken: false,
@@ -378,7 +381,7 @@ function mockDisk(on: On, env: Record<string, string> = { HOME }): Disk {
 
     return { value: names.map(path => ({ name: path.slice(dir.length), kind: 'file' as const, size: 0, mtimeMs: mtimes.get(path) ?? 0, isLink: false })) }
   })
-  on('process.run', (_$, e) => {
+  on('process.run', async (_$, e) => {
     if (e.argv[0] === 'rm') {
       const path = e.argv.at(-1) ?? ''
       disk.removed.push(path)
@@ -386,6 +389,12 @@ function mockDisk(on: On, env: Record<string, string> = { HOME }): Disk {
     } else if (e.argv[0] === 'chmod') {
       disk.chmods.push([...e.argv])
       if (disk.isChmodBroken) throw new Error('operation not permitted')
+    } else if (e.argv[0] === 'git') {
+      disk.git.push([...e.argv])
+      await disk.gitGate
+      const reply = disk.gitReply(e.argv)
+
+      return { value: { ...OK_RUN, ...reply } }
     } else {
       disk.played.push([...e.argv])
     }
@@ -879,4 +888,485 @@ test('own sound file is played when set', { options: { soundFile: '/home/me/song
   await $.tool.call({ tool: 'TodoWrite', todos: [...ALL_DONE] })
   await settle(clock)
   expect(files).toEqual(['/home/me/song.mp3'])
+})
+
+const USAGE_MS = 5000
+const MINUTE = 60_000
+
+const gaugeUsage = (context: number, five = 31, resetsAt?: string) => ({
+  startedAt: NOW,
+  context: { tokens: context * 10_000, window: 1_000_000, percent: context },
+  rateLimits: [{ kind: 'five_hour', percentUsed: five, resetsAt }, { kind: 'seven_day', percentUsed: 9 }],
+  cost: { usd: 0.1 },
+})
+
+/** `session.usage` answers with `current.value`; undefined makes it fail like a broken engine would. */
+function mockUsage(on: On, current: { value: unknown }): void {
+  on('session.usage', () => {
+    if (current.value === undefined) throw new Error('no usage')
+
+    return { value: current.value as never }
+  })
+}
+
+test('the strip shows the context and both quota windows from the session usage', async ($, on) => {
+  const clock = mock.clock(on, { now: NOW })
+  on('ui.status', () => ({ value: undefined }))
+  mockDisk(on)
+  mockUsage(on, { value: gaugeUsage(62) })
+  await boot($)
+  await clock.settle()
+  const ui = await mountPane($)
+
+  expect(await ui.find({ type: 'Text', text: /ctx/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /62%/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /5h/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /31%/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /7d/ })).toBeDefined()
+  await ui.unmount()
+})
+
+test('without a usage reading the pane has no gauges line', async ($, on) => {
+  const clock = mock.clock(on, { now: NOW })
+  on('ui.status', () => ({ value: undefined }))
+  mockDisk(on)
+  await boot($)
+  await clock.settle()
+  const ui = await mountPane($)
+
+  expect(await ui.find({ type: 'Text', text: /ctx/ })).toBeUndefined()
+  await ui.unmount()
+})
+
+test('a failing usage read keeps the gauges for 30 seconds, then hides them', async ($, on) => {
+  const clock = mock.clock(on, { now: NOW })
+  on('ui.status', () => ({ value: undefined }))
+  mockDisk(on)
+  const usage: { value: unknown } = { value: gaugeUsage(62) }
+  mockUsage(on, usage)
+  await boot($)
+  await clock.settle()
+  usage.value = undefined
+
+  await clock.advance(25_000)
+  let ui = await mountPane($)
+  expect(await ui.find({ type: 'Text', text: /62%/ })).toBeDefined()
+  await ui.unmount()
+
+  await clock.advance(10_000)
+  ui = await mountPane($)
+  expect(await ui.find({ type: 'Text', text: /62%/ })).toBeUndefined()
+  await ui.unmount()
+})
+
+test('the context toast fires once per crossing of 80% and again after a dip below 70%', async ($, on) => {
+  const clock = mock.clock(on, { now: NOW })
+  on('ui.status', () => ({ value: undefined }))
+  const toasts: string[] = []
+  on('ui.toast', (_$, e) => {
+    toasts.push(e.text)
+
+    return { value: undefined }
+  })
+  mockDisk(on)
+  const usage: { value: unknown } = { value: gaugeUsage(62) }
+  mockUsage(on, usage)
+  await boot($)
+  await clock.settle()
+  for (const percent of [82, 85, 75, 65, 81]) {
+    usage.value = gaugeUsage(percent)
+    await clock.advance(USAGE_MS)
+  }
+
+  expect(toasts).toEqual(['ctx 82% · consider /compact', 'ctx 81% · consider /compact'])
+})
+
+test('a quota window at 90% toasts once per window, with its reset time', async ($, on) => {
+  const clock = mock.clock(on, { now: NOW })
+  on('ui.status', () => ({ value: undefined }))
+  const toasts: string[] = []
+  on('ui.toast', (_$, e) => {
+    toasts.push(e.text)
+
+    return { value: undefined }
+  })
+  mockDisk(on)
+  const usage: { value: unknown } = { value: gaugeUsage(10, 91, new Date(NOW + 40 * MINUTE).toISOString()) }
+  mockUsage(on, usage)
+  await boot($)
+  await clock.settle()
+  await clock.advance(USAGE_MS)
+  expect(toasts).toEqual(['5h limit 91% · resets in 40m'])
+
+  usage.value = gaugeUsage(10, 92, new Date(NOW + 300 * MINUTE).toISOString())
+  await clock.advance(USAGE_MS)
+  expect(toasts).toEqual(['5h limit 91% · resets in 40m', '5h limit 92% · resets in 5h00m'])
+})
+
+test('the toasts can be turned off', { options: { isContextWarningOn: false } }, async ($, on) => {
+  const clock = mock.clock(on, { now: NOW })
+  on('ui.status', () => ({ value: undefined }))
+  const toasts: string[] = []
+  on('ui.toast', (_$, e) => {
+    toasts.push(e.text)
+
+    return { value: undefined }
+  })
+  mockDisk(on)
+  mockUsage(on, { value: gaugeUsage(95, 95) })
+  await boot($)
+  await clock.settle()
+  await clock.advance(USAGE_MS * 2)
+
+  expect(toasts).toEqual([])
+})
+
+test('a toast that fails never breaks the usage read', async ($, on) => {
+  const clock = mock.clock(on, { now: NOW })
+  on('ui.status', () => ({ value: undefined }))
+  on('ui.toast', () => {
+    throw new Error('no terminal')
+  })
+  mockDisk(on)
+  mockUsage(on, { value: gaugeUsage(95) })
+  await boot($)
+  await clock.settle()
+  const ui = await mountPane($)
+
+  expect(await ui.find({ type: 'Text', text: /95%/ })).toBeDefined()
+  await ui.unmount()
+})
+
+test('a short pane drops strip lines from the bottom but keeps a task row', async ($, on) => {
+  const clock = mock.clock(on, { now: NOW })
+  on('ui.status', () => ({ value: undefined }))
+  on('tool.call', { tool: 'TodoWrite' }, () => ({ result: { oldTodos: [], newTodos: [] } }))
+  mockDisk(on)
+  mockUsage(on, { value: gaugeUsage(62) })
+  await boot($)
+  await clock.settle()
+  await $.tool.call({ tool: 'TodoWrite', todos: [{ content: 'only task', status: 'in_progress', activeForm: 'O' }] })
+  const ui = await $.ui.mount({
+    plugin: 'task-progress',
+    surface: 'terminal',
+    component: 'Pane',
+    props: { ...PANE_PROPS, bodyColumns: 98, scroll: { bodyRows: 8 } } as never,
+    requestId: 'task-progress',
+  })
+
+  expect(await ui.find({ type: 'Text', text: /only task/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /ctx/ })).toBeUndefined()
+  await ui.unmount()
+})
+
+const activitySetup = async ($: Engine, on: On) => {
+  const clock = mock.clock(on, { now: NOW })
+  on('ui.status', () => ({ value: undefined }))
+  mockDisk(on)
+  await boot($)
+  await clock.settle()
+
+  return clock
+}
+
+test('while a tool runs the pane names it, afterwards it reads as the last call', async ($, on) => {
+  let ui: Awaited<ReturnType<typeof mountPane>> | undefined
+  let whileRunning: unknown
+  on('tool.call', { tool: 'Edit' }, async () => {
+    whileRunning = await ui?.find({ type: 'Text', text: /▶ Edit register\.tsx/ })
+
+    return { result: 'ok' }
+  })
+  await activitySetup($, on)
+  ui = await mountPane($)
+
+  await $.tool.call({ tool: 'Edit', file_path: '/x/register.tsx', old_string: 'a', new_string: 'b' } as never)
+
+  expect(whileRunning).toBeDefined()
+  await ui.unmount()
+  ui = await mountPane($)
+  expect(await ui.find({ type: 'Text', text: /· Edit register\.tsx 0s ago/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /▶/ })).toBeUndefined()
+  await ui.unmount()
+})
+
+test('the list tools never show as activity', async ($, on) => {
+  await activitySetup($, on)
+  await $.tool.call({ tool: PROGRESS, tasks: [{ subject: 'a', status: 'in_progress' }] } as never)
+  const ui = await mountPane($)
+
+  expect(await ui.find({ type: 'Text', text: /progress/ })).toBeUndefined()
+  await ui.unmount()
+})
+
+test('a subagent call counts as an agent and never as the main line', async ($, on) => {
+  let ui: Awaited<ReturnType<typeof mountPane>> | undefined
+  let seen: unknown
+  on('tool.call', { tool: 'Read' }, async () => {
+    seen = await ui?.find({ type: 'Text', text: /\+1 agent/ })
+
+    return { result: 'ok' }
+  })
+  const clock = await activitySetup($, on)
+  ui = await mountPane($)
+
+  await $.tool.call({ tool: 'Read', file_path: '/x/a.ts', agentId: SUBAGENT } as never)
+  expect(seen).toBeDefined()
+  await ui.unmount()
+
+  let again = await mountPane($)
+  expect(await again.find({ type: 'Text', text: /\+1 agent/ })).toBeDefined()
+  expect(await again.find({ type: 'Text', text: /Read a\.ts/ })).toBeUndefined()
+  await again.unmount()
+
+  await clock.advance(20_000)
+  again = await mountPane($)
+  expect(await again.find({ type: 'Text', text: /agent/ })).toBeUndefined()
+  await again.unmount()
+})
+
+test('the hook leaves the result alone, and a tool that throws leaves no running line and is not run twice', async ($, on) => {
+  let runs = 0
+  on('tool.call', { tool: 'Bash' }, () => {
+    runs += 1
+    throw new Error('boom')
+  })
+  on('tool.call', { tool: 'Read' }, () => ({ result: 'same' }))
+  await activitySetup($, on)
+
+  expect(await $.tool.call({ tool: 'Read', file_path: '/x/a.ts' } as never)).toEqual({ result: 'same' })
+  let failed = false
+  try {
+    await $.tool.call({ tool: 'Bash', command: 'false' } as never)
+  } catch {
+    failed = true
+  }
+  const ui = await mountPane($)
+
+  expect(failed).toBe(true)
+  expect(runs).toBe(1)
+  expect(await ui.find({ type: 'Text', text: /▶/ })).toBeUndefined()
+  await ui.unmount()
+})
+
+/** A git world: each directory prefix maps to a repository root, each root to its `status -b` text. */
+function gitWorld(disk: Disk, roots: Record<string, string>, statuses: Record<string, string>) {
+  disk.gitReply = argv => {
+    if (argv.includes('rev-parse')) {
+      const dir = argv[2] ?? ''
+      const root = Object.keys(roots).find(prefix => dir === prefix || dir.startsWith(`${prefix}/`))
+
+      return root === undefined ? { exitCode: 128, stdout: '' } : { exitCode: 0, stdout: `${root}\n` }
+    }
+    const root = argv[argv.indexOf('-C') + 1] ?? ''
+
+    return { exitCode: 0, stdout: statuses[root] ?? '' }
+  }
+}
+
+/** The clock of the running repository test: repository tracking runs after the edit's result, so edits wait for it to settle. */
+let repoClock: { settle: () => Promise<void> } | undefined
+
+const edit = async ($: Engine, path: string, agentId?: string) => {
+  const ran = await $.tool.call({ tool: 'Edit', file_path: path, old_string: 'a', new_string: 'b', agentId } as never)
+  await repoClock?.settle()
+
+  return ran
+}
+
+async function repoSetup($: Engine, on: On) {
+  const clock = mock.clock(on, { now: NOW })
+  on('ui.status', () => ({ value: undefined }))
+  on('tool.call', { tool: 'Edit' }, () => ({ result: 'ok' }))
+  on('tool.call', { tool: 'Read' }, () => ({ result: 'ok' }))
+  on('tool.call', { tool: 'Bash' }, () => ({ result: 'ok' }))
+  const disk = mockDisk(on)
+  await boot($)
+  await clock.settle()
+  repoClock = clock
+
+  return { clock, disk }
+}
+
+const GIT_POLL_MS = 10_000
+
+test('editing a file in a repository shows its branch, changed files and distance from the upstream', async ($, on) => {
+  const { disk } = await repoSetup($, on)
+  gitWorld(disk, { '/w/svc-a': '/w/svc-a' }, { '/w/svc-a': '## dev-x...origin/dev-x [ahead 2]\n M a.ts\n?? b.ts\n' })
+
+  await edit($, '/w/svc-a/src/x.ts')
+  const ui = await mountPane($)
+
+  expect(await ui.find({ type: 'Text', text: /svc-a/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /dev-x/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /●2/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /↑2/ })).toBeDefined()
+  expect(disk.git).toEqual([
+    ['git', '-C', '/w/svc-a/src', 'rev-parse', '--show-toplevel'],
+    ['git', '--no-optional-locks', '-C', '/w/svc-a', 'status', '--porcelain', '-b'],
+  ])
+  await ui.unmount()
+})
+
+test('a clean repository shows a tick', async ($, on) => {
+  const { disk } = await repoSetup($, on)
+  gitWorld(disk, { '/w/svc-a': '/w/svc-a' }, { '/w/svc-a': '## main...origin/main\n' })
+  await edit($, '/w/svc-a/a.ts')
+  const ui = await mountPane($)
+
+  expect(await ui.find({ type: 'Text', text: /✓/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /●/ })).toBeUndefined()
+  await ui.unmount()
+})
+
+test('reads, shell commands, relative paths and files outside any repository start no repository tracking', async ($, on) => {
+  const { disk } = await repoSetup($, on)
+  gitWorld(disk, { '/w/svc-a': '/w/svc-a' }, { '/w/svc-a': '## main\n' })
+
+  await $.tool.call({ tool: 'Read', file_path: '/w/svc-a/a.ts' } as never)
+  await $.tool.call({ tool: 'Bash', command: 'sed -i x /w/svc-a/a.ts' } as never)
+  await edit($, 'src/relative.ts')
+  expect(disk.git).toEqual([])
+
+  await edit($, '/tmp/elsewhere/x.ts')
+  const ui = await mountPane($)
+  expect(disk.git.length).toBe(1)
+  expect(await ui.find({ type: 'Text', text: /⎇/ })).toBeUndefined()
+  await ui.unmount()
+})
+
+test('a subagent edit counts, a second edit in the same directory resolves the root once', async ($, on) => {
+  const { disk } = await repoSetup($, on)
+  gitWorld(disk, { '/w/svc-a': '/w/svc-a' }, { '/w/svc-a': '## main\n M a\n' })
+
+  await edit($, '/w/svc-a/src/a.ts', SUBAGENT)
+  await edit($, '/w/svc-a/src/b.ts')
+  const ui = await mountPane($)
+
+  expect(await ui.find({ type: 'Text', text: /svc-a/ })).toBeDefined()
+  expect(disk.git.filter(argv => argv.includes('rev-parse')).length).toBe(1)
+  await ui.unmount()
+})
+
+test('a second repository adds a line, four make two lines and a count', async ($, on) => {
+  const { disk } = await repoSetup($, on)
+  const roots = Object.fromEntries(['a', 'b', 'c', 'd'].map(n => [`/w/svc-${n}`, `/w/svc-${n}`]))
+  gitWorld(disk, roots, Object.fromEntries(Object.keys(roots).map(root => [root, '## main\n M x\n'])))
+
+  await edit($, '/w/svc-a/x.ts')
+  await edit($, '/w/svc-b/x.ts')
+  let ui = await mountPane($)
+  expect(await ui.find({ type: 'Text', text: /svc-a/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /svc-b/ })).toBeDefined()
+  await ui.unmount()
+
+  await edit($, '/w/svc-c/x.ts')
+  await edit($, '/w/svc-d/x.ts')
+  ui = await mountPane($)
+  expect(await ui.find({ type: 'Text', text: /svc-d/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /svc-c/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /svc-a/ })).toBeUndefined()
+  expect(await ui.find({ type: 'Text', text: /\+2 repos/ })).toBeDefined()
+  await ui.unmount()
+})
+
+test('the status is read again every 10 seconds', async ($, on) => {
+  const { clock, disk } = await repoSetup($, on)
+  const statuses: Record<string, string> = { '/w/svc-a': '## main\n M a\n' }
+  gitWorld(disk, { '/w/svc-a': '/w/svc-a' }, statuses)
+  await edit($, '/w/svc-a/a.ts')
+
+  statuses['/w/svc-a'] = '## main\n M a\n M b\n M c\n'
+  await clock.advance(GIT_POLL_MS)
+  const ui = await mountPane($)
+
+  expect(await ui.find({ type: 'Text', text: /●3/ })).toBeDefined()
+  await ui.unmount()
+})
+
+test('a truncated status is skipped and the last reading stays', async ($, on) => {
+  const { clock, disk } = await repoSetup($, on)
+  gitWorld(disk, { '/w/svc-a': '/w/svc-a' }, { '/w/svc-a': '## main\n M a\n' })
+  await edit($, '/w/svc-a/a.ts')
+  const reply = disk.gitReply
+  disk.gitReply = argv => (argv.includes('status') ? { exitCode: 0, stdout: '## main\n', isStdoutTruncated: true } : reply(argv))
+  await clock.advance(GIT_POLL_MS)
+  const ui = await mountPane($)
+
+  expect(await ui.find({ type: 'Text', text: /●1/ })).toBeDefined()
+  await ui.unmount()
+})
+
+test('a repository whose status fails three polls in a row is dropped, a failure in between is forgiven', async ($, on) => {
+  const { clock, disk } = await repoSetup($, on)
+  gitWorld(disk, { '/w/svc-a': '/w/svc-a' }, { '/w/svc-a': '## main\n M a\n' })
+  await edit($, '/w/svc-a/a.ts')
+  const good = disk.gitReply
+  disk.gitReply = argv => (argv.includes('status') ? { exitCode: 128, stdout: '' } : good(argv))
+
+  await clock.advance(GIT_POLL_MS * 2)
+  let ui = await mountPane($)
+  expect(await ui.find({ type: 'Text', text: /svc-a/ })).toBeDefined()
+  await ui.unmount()
+
+  disk.gitReply = good
+  await clock.advance(GIT_POLL_MS)
+  disk.gitReply = argv => (argv.includes('status') ? { exitCode: 128, stdout: '' } : good(argv))
+  await clock.advance(GIT_POLL_MS * 2)
+  ui = await mountPane($)
+  expect(await ui.find({ type: 'Text', text: /svc-a/ })).toBeDefined()
+  await ui.unmount()
+
+  await clock.advance(GIT_POLL_MS)
+  ui = await mountPane($)
+  expect(await ui.find({ type: 'Text', text: /svc-a/ })).toBeUndefined()
+  await ui.unmount()
+})
+
+test('git failing or missing never breaks the edit, and a failed root lookup is retried at the next edit', async ($, on) => {
+  const { disk } = await repoSetup($, on)
+  disk.gitReply = () => {
+    throw new Error('spawn git ENOENT')
+  }
+
+  expect(await edit($, '/w/svc-a/a.ts')).toEqual({ result: 'ok' })
+  gitWorld(disk, { '/w/svc-a': '/w/svc-a' }, { '/w/svc-a': '## main\n M a\n' })
+  await edit($, '/w/svc-a/a.ts')
+  const ui = await mountPane($)
+
+  expect(await ui.find({ type: 'Text', text: /svc-a/ })).toBeDefined()
+  await ui.unmount()
+})
+
+test('a failing Edit does not make its directory a touched repository', async ($, on) => {
+  const clock = mock.clock(on, { now: NOW })
+  on('ui.status', () => ({ value: undefined }))
+  on('tool.call', { tool: 'Edit' }, () => ({ result: 'nope', isError: true }))
+  const disk = mockDisk(on)
+  await boot($)
+  await clock.settle()
+  gitWorld(disk, { '/w/svc-a': '/w/svc-a' }, { '/w/svc-a': '## main\n' })
+  await edit($, '/w/svc-a/a.ts')
+
+  expect(disk.git).toEqual([])
+})
+
+test('a slow git never delays the result of an Edit', async ($, on) => {
+  const { clock, disk } = await repoSetup($, on)
+  repoClock = undefined
+  gitWorld(disk, { '/w/svc-a': '/w/svc-a' }, { '/w/svc-a': '## main\n' })
+  let release: () => void = () => undefined
+  disk.gitGate = new Promise<void>(resolve => {
+    release = resolve
+  })
+  let isDone = false
+  const pending = $.tool.call({ tool: 'Edit', file_path: '/w/svc-a/a.ts', old_string: 'a', new_string: 'b' } as never).then(() => {
+    isDone = true
+  })
+  await clock.settle()
+  const wasDone = isDone
+  release()
+  await pending
+
+  expect(wasDone).toBe(true)
 })

@@ -31,6 +31,24 @@ Every session with the mod publishes its progress to `~/.claude/task-progress/<s
 
 `◆` is a session that is idle and not finished (work left, or no task list yet), `▶` is busy, and `·` is anything else: a finished idle session (`xong`) or a status the mod does not know (shown as `<status> <age>`). A session without the mod shows its state only. Past 5 rows the pane adds `+N more`. When a session goes from busy to idle a toast says so; option `isWaitSoundOn` (default off) also plays the jingle. Message a session with `/task-progress-tell <name prefix> <message>`: the first word is matched as a prefix of the session name or id (an exact name wins; an ambiguous prefix lists the candidates with their id), and the rest is the message. Files of ended sessions are removed when they end, and files left by crashed ones after a day.
 
+## Live strip
+
+Under the timing line the pane shows up to five lines about the running session:
+
+```
+ctx ▰▰▰▰▰▱▱▱ 62%   5h ▰▰▱▱ 31%   7d ▰▱▱▱ 9%
+▶ Edit register.tsx 4s   +1 agent
+⎇ core-inventory-service  dev-dat-rate-sheet  ●1
+⎇ admin-v3  dev-dat-rate-sheet-duplicate-fixes  ●8 ↑2
+```
+
+- **Gauges:** context fill and the 5-hour and 7-day quota windows, read from the session usage every 5 seconds. A figure at 80% or more turns red; a quota window that high also shows when it resets (`↻2h10m`). A window with no reading is left out; if reads keep failing the line goes after 30 seconds.
+- **Doing:** the main session's oldest running tool call (with its time once it passes 2 seconds), or the last call for a minute after it ends; `+N agents` counts subagents seen in the last 15 seconds. The progress and list tools are never shown.
+- **Repositories:** one line per repository the session or a subagent has edited with `Edit`, `Write`, `NotebookEdit` or `MultiEdit` (shell commands do not count): the repository's name, its branch, `●N` changed files (tracked changes and untracked files), `✓` when clean, `↑a`/`↓b` against its upstream. Up to 3 repositories show; from 4 on, 2 show and `+N repos` counts the rest. Status is read every 10 seconds with `git --no-optional-locks status`, so it never takes the lock your own git commands need; at most 6 repositories are tracked.
+- **Toasts:** `ctx 82% · consider /compact` once per crossing of 80% (re-armed below 70%), and `5h limit 91% · resets in 40m` once per window at 90%. Option `isContextWarningOn` (default on) turns both off.
+
+A pane too short for the whole strip drops lines from the bottom and always keeps one task row.
+
 ## Completion sound
 
 When every task in the list is completed, a short jingle plays once (`sounds/done.wav`). It uses the first player that works: `afplay` (macOS), then `pw-play`, `paplay`, `aplay`, `ffplay`. Options (`/config` or `pluginConfigs`):

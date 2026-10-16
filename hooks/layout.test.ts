@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { litWindows, sceneLayout } from './layout'
+import { litWindows, sceneLayout, stripRoom } from './layout'
 
 test('a roomy pane gets the full 96x16 scene, wider panes still 96', () => {
   expect(sceneLayout(96, 40)).toEqual({ columns: 96, rows: 16, firstRow: 0 })
@@ -47,4 +47,15 @@ test('lit windows never go down as tasks finish', () => {
       last = lit
     }
   }
+})
+
+test('the strip gets the rows left after the chrome, scene, sessions block and one task row', () => {
+  expect(stripRoom(40, 16, 0, 5)).toBe(5)
+  expect(stripRoom(40, 16, 5, 5)).toBe(5)
+  expect(stripRoom(24, 9, 0, 5)).toBe(5)
+  expect(stripRoom(12, 0, 0, 5)).toBe(4)
+  expect(stripRoom(10, 0, 0, 5)).toBe(2)
+  expect(stripRoom(8, 0, 3, 5)).toBe(0)
+  expect(stripRoom(40, 16, 0, 2)).toBe(2)
+  expect(stripRoom(40, 16, 0, 0)).toBe(0)
 })

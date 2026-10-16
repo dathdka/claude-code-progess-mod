@@ -6,6 +6,8 @@ export const MIN_SCENE_ROWS = 8
 export const INFO_ROWS = 15
 /** Rows assumed when the pane does not report its height. */
 export const DEFAULT_BODY_ROWS = 40
+/** Rows of the pane that are neither scene, strip, sessions block nor tasks: padding, bar, header lines, spacer. */
+export const CHROME_ROWS = 7
 
 export type SceneLayout = { columns: number; rows: number; firstRow: number }
 
@@ -26,4 +28,9 @@ export function litWindows(done: number, total: number, windows: number): number
   if (done >= total) return windows
 
   return Math.floor((windows * Math.max(0, done)) / total)
+}
+
+/** Strip lines that fit: what is left after the chrome, scene and sessions block, keeping one task row. Lines beyond drop from the bottom. */
+export function stripRoom(bodyRows: number, sceneRows: number, blockRows: number, wanted: number): number {
+  return Math.max(0, Math.min(wanted, bodyRows - CHROME_ROWS - sceneRows - blockRows - 1))
 }
