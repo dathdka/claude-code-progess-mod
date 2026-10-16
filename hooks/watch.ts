@@ -2,6 +2,7 @@ import type { EngineInterface } from 'claude-code'
 
 import type { Readings, RepoStatus } from '../types'
 import { readingsFromUsage } from './gauges'
+import { MAX_BYTES, ledgerDone, ledgerPathFor } from './plan'
 import { parseStatus } from './repos'
 
 /** Failures already told to the debug channel, by kind: each kind is logged once. */
@@ -66,5 +67,18 @@ export async function readStatus($: EngineInterface, root: string): Promise<Repo
     await logOnce($, 'could not read a repository status', error)
 
     return 'fail'
+  }
+}
+
+/** The task numbers a plan's subagent-driven ledger reports complete; undefined without a ledger or when it cannot be read (a missing ledger is normal: never logged). */
+export async function readLedger($: EngineInterface, planPath: string): Promise<number[] | undefined> {
+  const path = ledgerPathFor(planPath)
+  if (path === undefined) return undefined
+  try {
+    const text = await $.fs.read(path)
+
+    return typeof text === 'string' && text.length <= MAX_BYTES ? ledgerDone(text, planPath) : undefined
+  } catch {
+    return undefined
   }
 }

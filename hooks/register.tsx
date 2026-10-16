@@ -1,43 +1,30 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { Activity, GaugeState, Item, Repo, SessionRow, TaskStatus } from '../types'
+import type { Activity, GaugeState, Item, PlanState, PlanView, Repo, SessionRow, TaskStatus, TrackedPlan } from '../types'
 import { sceneCells } from './compositor'
+import { isOk, mark, parseProgressInput, present, summarize, withReminder } from './helpers'
 import { EMPTY_ACTIVITY, begin, callLabel, describeDoing, end, touchedDirectory } from './activity'
+import { CARD_PADDING, DEFAULT_COLUMNS, DEFAULT_SOUND_SECONDS, GAUGE_STALE_MS, GIT_POLL_MS, LIST_TOOLS, MAX_SOUND_SECONDS, MIN_SOUND_SECONDS, PLAN_MS, POLL_MS, PROGRESS_TOOL, STALE_CALLS, TELL_USAGE, USAGE_MS, USAGE_PROMPT } from './constants'
 import { contextAlarm, formatGauges, freshLimitAlerts, limitName, resetText } from './gauges'
 import { CHROME_ROWS, DEFAULT_BODY_ROWS, MAX_SCENE_COLUMNS, litWindows, sceneLayout, stripRoom } from './layout'
 import { describeRow, layoutRow, newlyWaiting, parseTell, resolveTarget, visibleRows } from './overview'
+import { MAX_BYTES, NO_ANNOUNCED, applyDoneRecent, currentPhase, freshPhases, isCleanPlanPath, mergePlans, parsePlan, phaseDoneCount, planPathOf, plansOf, shouldResetFocus, touchPlanState, withLedgerState, withParsed } from './plan'
+import type { Announced } from './plan'
+import { MAX_LIST_ROWS, phaseLines, phaseNumber, shownFocus, taskLines, toneColor } from './planview'
+import type { PlanLine } from './planview'
 import { isAllDone, timingText } from './progress'
 import { applyReading, cacheRoot, repoLine, repoName, touchRepo, visibleRepos } from './repos'
 import type { RootCache } from './repos'
-import { playerCommands, soundPath, wasCutByCap } from './sound'
+import { playDone, soundPath } from './sound'
 import { COLORS, barParts, truncate } from './style'
 import { hasSessionIdChanged, pollSessions, publishProgress, removeRecord, resetSyncState } from './sync'
-import { findRoot, readStatus, readUsage, resetWatchState } from './watch'
+import { findRoot, logOnce, readLedger, readStatus, readUsage, resetWatchState } from './watch'
 import { WINDOWS } from './world'
 
 const PANE = 'task-progress'
-const PROGRESS_TOOL = 'mcp__task-progress__progress'
-const STATUSES: readonly TaskStatus[] = ['pending', 'in_progress', 'completed']
-const CARD_PADDING = 1
-const DEFAULT_COLUMNS = 24
-const DEFAULT_SOUND_SECONDS = 12
-const MIN_SOUND_SECONDS = 1
-const MAX_SOUND_SECONDS = 120
-/** Tool calls without a list update after which the pane warns that it may be stale. */
-const STALE_CALLS = 10
-/** How often the other sessions are read. */
-const POLL_MS = 3000
-/** How often the session usage is read. */
-const USAGE_MS = 5000
-/** How often the tracked repositories are read. */
-const GIT_POLL_MS = 10_000
-/** Gauges older than this are hidden when reads keep failing. */
-const GAUGE_STALE_MS = 30_000
-const TELL_USAGE = 'Usage: /task-progress-tell <session name> <message>'
-/** The tools that update the list: they reset the stale counter instead of counting. */
-const LIST_TOOLS: readonly string[] = [PROGRESS_TOOL, 'TodoWrite', 'TaskCreate', 'TaskUpdate', 'TaskList']
-const USAGE_PROMPT = `The user watches a live task-progress pane fed by the ${PROGRESS_TOOL} tool. For any work of 2 or more steps, call it first with the full ordered list, then call it again every time a step starts (in_progress) or finishes (completed) and whenever the plan changes, also in the middle of long runs of tool calls. Keep exactly one task in_progress. Keep every task as its own entry for the whole job: never merge finished tasks into one line and never rename them; a finished task stays in the list as completed, and each call changes statuses only, adding tasks at the end or in place. Never leave the list stale: when the work is done, mark every task completed.`
+/** The focus header row besides the phase number and name: a space, a space, `[ ‹ ]`, a space and `[ › ]`. */
+const FOCUS_ROW_FIXED = 1 + 1 + 5 + 1 + 5
 
 let isSoundOn = true
 let isWaitSoundOn = false
@@ -56,6 +43,15 @@ let callSeq = 0
 let runId = ''
 let roots: RootCache = new Map()
 let isPollingRepos = false
+/** The text last parsed for each tracked plan file, so an unchanged file is not parsed again. */
+let planTexts: ReadonlyMap<string, string> = new Map()
+let isReadingPlan = false
+/** The tracked plans at the end of the last read: when one left the list or the phases shrank, a kept focus index would point into another plan. */
+let seenPlans: readonly TrackedPlan[] = []
+/** A refresh was asked for while a read was running: the read runs once more. */
+let isPlanDirty = false
+/** Per tracked plan, its phase names and the phases complete at the last read (a phase is news only when it newly joins them). */
+let announced: Announced = NO_ANNOUNCED
 
 const todos = atom({ plugin: 'task-progress', key: 'todos' } as const, [] as Item[])
 const startedAt = atom({ plugin: 'task-progress', key: 'startedAt' } as const, 0)
@@ -66,55 +62,8 @@ const sessions = atom({ plugin: 'task-progress', key: 'sessions' } as const, [] 
 const activity = atom({ plugin: 'task-progress', key: 'activity' } as const, EMPTY_ACTIVITY as Activity)
 const repos = atom({ plugin: 'task-progress', key: 'repos' } as const, [] as Repo[])
 const gauges = atom({ plugin: 'task-progress', key: 'gauges' } as const, null as GaugeState | null)
-
-const summarize = (items: Item[]) => {
-  const done = items.filter(i => i.status === 'completed').length
-  const percent = items.length === 0 ? 0 : Math.round((done / items.length) * 100)
-
-  return { done, total: items.length, percent }
-}
-
-function parseProgressInput(raw: unknown): Item[] | undefined {
-  if (!Array.isArray(raw)) return undefined
-  const items: Item[] = []
-  for (const [index, entry] of raw.entries()) {
-    const subject = (entry as { subject?: unknown } | null)?.subject
-    const status = (entry as { status?: unknown } | null)?.status
-    if (typeof subject !== 'string' || !STATUSES.includes(status as TaskStatus)) return undefined
-    items.push({ id: String(index), label: subject, status: status as TaskStatus })
-  }
-
-  return items
-}
-
-const mark = (status: TaskStatus) =>
-  status === 'completed' ? '✔' : status === 'in_progress' ? '▶' : '○'
-
-const isOk = (ran: { deny?: string; isError?: boolean }) =>
-  ran.deny === undefined && ran.isError !== true
-
-/** The elements that are there, without the nulls left by a line with nothing to show. */
-function present<T>(list: ReadonlyArray<T | null>): T[] {
-  return list.filter((entry): entry is T => entry !== null)
-}
-
-async function playDone($: EngineInterface, file: string, maxMs: number): Promise<void> {
-  try {
-    for (const argv of playerCommands(file)) {
-      const started = await $.clock.now()
-      try {
-        const { exitCode } = await $.process.run(argv, { timeoutMs: maxMs })
-        if (exitCode === 0) return
-      } catch {
-        // either this player is not installed, or the cap cut a long clip short
-        if (wasCutByCap(started, await $.clock.now(), maxMs)) return
-      }
-    }
-    $.ui.log('task-progress: no audio player could play the completion sound', { to: 'debug' })
-  } catch {
-    // a sound is a side effect: it must never throw into the session
-  }
-}
+const planAtom = atom({ plugin: 'task-progress', key: 'plan' } as const, null as PlanState | null)
+const viewAtom = atom({ plugin: 'task-progress', key: 'planView' } as const, { view: 'todo', focus: null, pressedAt: 0 } as PlanView)
 
 let isPolling = false
 
@@ -179,13 +128,25 @@ async function refreshGauges($: EngineInterface): Promise<void> {
   }
 }
 
-/** A main-session call that is not a list update: one more call without a progress update. */
-async function countCall($: EngineInterface): Promise<void> {
+/** A main-session result at every 10th call without a list update while a task is in progress carries a reminder for the model. */
+async function remind<T extends { context?: readonly string[] }>($: EngineInterface, ran: T, counted: number): Promise<T> {
   try {
-    await update($, idleCalls, n => n + 1)
+    return withReminder(ran, counted, [...(await read($, todos)), ...(await read($, tasks))])
+  } catch {
+    return ran // a reminder must never reach the tool call
+  }
+}
+
+/** A main-session call that is not a list update: one more call without a progress update; the count this call made (0 on a failure), so two calls at once never both see the reminder threshold. */
+async function countCall($: EngineInterface): Promise<number> {
+  let counted = 0
+  try {
+    await update($, idleCalls, n => (counted = n + 1))
   } catch {
     // bookkeeping must never reach the tool call
   }
+
+  return counted
 }
 
 /** A call starts: remember it so the pane can name it. */
@@ -205,6 +166,8 @@ async function endCall($: EngineInterface, e: { tool: string; agentId?: string }
     const now = await $.clock.now()
     await update($, activity, a => end(a, id, now))
     if (!isSuccess) return
+    // a subagent's reads must not switch the plan the main pane follows
+    if (e.agentId === undefined) void notePlan($, e.tool, e as unknown as Record<string, unknown>)
     const dir = touchedDirectory(e.tool, e as unknown as Record<string, unknown>)
     // not awaited: git must never delay the tool's result (trackTouch swallows its own errors)
     if (dir !== undefined) void trackTouch($, dir)
@@ -250,6 +213,139 @@ async function pollRepos($: EngineInterface): Promise<void> {
   }
 }
 
+/** The tracked plans with the todo list's completed `Task N` entries applied to the one touched last (before any merge, see applyDoneRecent). */
+async function appliedPlans($: EngineInterface): Promise<TrackedPlan[]> {
+  const items = [...(await read($, todos)), ...(await read($, tasks))]
+
+  return applyDoneRecent(plansOf(await read($, planAtom)), items.filter(i => i.status === 'completed').map(i => i.label))
+}
+
+/** One read of one tracked plan file; a failed read, a file too large, or one without tasks keeps that plan's last parse. */
+async function readOnePlan($: EngineInterface, path: string): Promise<void> {
+  const text = await $.fs.read(path)
+  if (typeof text !== 'string' || text.length > MAX_BYTES) return
+  const entry = plansOf(await read($, planAtom)).find(t => t.path === path)
+  // the plan left the list while the file was read (the text is discarded), or it is unchanged since its last parse
+  if (entry === undefined || (entry.plan !== null && planTexts.get(path) === text)) return
+  planTexts = new Map([...planTexts, [path, text]])
+  const parsed = parsePlan(text, path.slice(path.lastIndexOf('/') + 1))
+  if (parsed !== undefined) await update($, planAtom, s => (s === null ? s : { ...s, plans: withParsed(plansOf(s), path, parsed) }))
+}
+
+/** Every tracked plan file and its ledger are read, each failure kept to its own file. */
+async function readPlansOnce($: EngineInterface): Promise<void> {
+  const paths = plansOf(await read($, planAtom)).map(t => t.path)
+  planTexts = new Map([...planTexts].filter(([path]) => paths.includes(path)))
+  for (const path of paths) {
+    await readOnePlan($, path).catch(error => logOnce($, 'could not read a plan file', error))
+    const done = await readLedger($, path)
+    if (done !== undefined) await update($, planAtom, s => withLedgerState(s, path, done))
+  }
+}
+
+/** The tracked plan files are read; a request made during a read makes it run once more, so none is dropped. */
+async function refreshPlan($: EngineInterface): Promise<void> {
+  if (isReadingPlan) {
+    isPlanDirty = true
+    return
+  }
+  isReadingPlan = true
+  try {
+    do {
+      isPlanDirty = false
+      await readPlansOnce($)
+    } while (isPlanDirty)
+    const plans = plansOf(await read($, planAtom))
+    if (shouldResetFocus(seenPlans, plans)) await update($, viewAtom, (v): PlanView => ({ ...v, focus: null }))
+    seenPlans = plans
+    await announcePhases($)
+  } catch (error) {
+    await logOnce($, 'could not read the plan file', error)
+  } finally {
+    isReadingPlan = false
+  }
+}
+
+/** Raises one toast per phase that has just become complete; a plan's first read, or a change in its phase names, only sets its baseline. */
+async function announcePhases($: EngineInterface): Promise<void> {
+  try {
+    const applied = await appliedPlans($) // `announced` is read after the last await: overlapping callers never announce twice
+    const { fresh, next } = freshPhases(announced, applied)
+    announced = next
+    for (const phase of fresh) {
+      try {
+        $.ui.toast(`Phase ${phaseNumber(phase.index)} ${phase.name} done (${phase.total}/${phase.total})`)
+      } catch {
+        // a toast is a side effect: it must never throw into the session
+      }
+    }
+  } catch {
+    // announcing is a side effect: it must never reach the session
+  }
+}
+
+/** `/task-progress-plan <absolute .md path>` follows only that plan file and pins it, `off` stops following plans. */
+async function setPlan($: EngineInterface, args: string): Promise<string> {
+  const path = args.trim()
+  if (path === 'off') {
+    await update($, planAtom, () => null)
+    await update($, viewAtom, (v): PlanView => ({ ...v, view: 'todo' }))
+    planTexts = new Map()
+    announced = NO_ANNOUNCED // the next read of a plan is a silent baseline again
+
+    return 'Plan tracking stopped.'
+  }
+  if (!path.startsWith('/')) return 'Usage: /task-progress-plan <absolute path to a .md plan> | off (the path must be absolute)'
+  if (!isCleanPlanPath(path)) return 'The plan must be a Markdown file (.md) whose path has no control characters.'
+  planTexts = new Map()
+  const now = await $.clock.now()
+  await update($, planAtom, () => ({ plans: [{ path, plan: null, lastTouchedAt: now, done: [] }], isPinned: true }))
+  await refreshPlan($)
+
+  return `Following ${path}.`
+}
+
+/** The Todo/Plan button: the pane switches to the other view. */
+async function toggleView($: EngineInterface): Promise<void> {
+  try {
+    await update($, viewAtom, (v): PlanView => ({ ...v, view: v.view === 'plan' ? 'todo' : 'plan' }))
+  } catch {
+    // a button is a side effect: it must never throw into the pane
+  }
+}
+
+/** The ‹ › buttons: the focus moves one phase (inside the update, so quick presses add up), and the move is dated so it returns to the current phase later. */
+async function moveFocus($: EngineInterface, step: number): Promise<void> {
+  try {
+    const plan = mergePlans(await appliedPlans($))
+    if (plan === null) return
+    const now = await $.clock.now()
+    const count = plan.phases.length
+    const current = currentPhase(plan)
+    await update($, viewAtom, (v): PlanView => {
+      const from = shownFocus(v.focus, v.pressedAt, now, current, count)
+
+      return { ...v, focus: Math.min(count - 1, Math.max(0, from + step)), pressedAt: now }
+    })
+  } catch {
+    // a button is a side effect: it must never throw into the pane
+  }
+}
+
+/** A tool call touched `path`: when it names a plan file the session also follows it (unless the user pinned one) and reads it at once. */
+async function notePlan($: EngineInterface, tool: string, input: Record<string, unknown>): Promise<void> {
+  try {
+    const path = planPathOf(tool, input)
+    if (path === undefined) return
+    // appended inside the update, so two touches in a row both land
+    const now = await $.clock.now()
+    await update($, planAtom, s => touchPlanState(s, path, now))
+    if (plansOf(await read($, planAtom)).some(t => t.path === path)) await refreshPlan($)
+  } catch {
+    // following a plan is a side effect: it must never reach the tool call
+  }
+}
+
 async function refreshStatus($: EngineInterface) {
   const list = [...(await read($, todos)), ...(await read($, tasks))]
   const { done, total, percent } = summarize(list)
@@ -270,6 +366,7 @@ async function refreshStatus($: EngineInterface) {
   }
   $.ui.status(total === 0 ? undefined : `tasks ${done}/${total} · ${percent}%`)
   await publishProgress($, list)
+  await announcePhases($)
 }
 
 export const register: Register = (on, options) => {
@@ -285,6 +382,11 @@ export const register: Register = (on, options) => {
   runId = Math.random().toString(36).slice(2, 8)
   roots = new Map()
   isPollingRepos = false
+  planTexts = new Map()
+  seenPlans = []
+  isReadingPlan = false
+  isPlanDirty = false
+  announced = NO_ANNOUNCED
   resetWatchState()
   resetSyncState()
   customSound = typeof options.soundFile === 'string' ? options.soundFile : ''
@@ -324,6 +426,10 @@ export const register: Register = (on, options) => {
       name: 'task-progress-tell',
       description: 'Send a message to another session: /task-progress-tell <session name> <message>',
     })
+    await $.command.register({
+      name: 'task-progress-plan',
+      description: 'Follow a Markdown plan file in the pane: /task-progress-plan <absolute path> | off',
+    })
     await update($, activity, () => EMPTY_ACTIVITY)
     await publishProgress($, [...(await read($, todos)), ...(await read($, tasks))])
     await refreshSessions($)
@@ -336,6 +442,9 @@ export const register: Register = (on, options) => {
     })
     $.clock.every(GIT_POLL_MS, () => {
       void pollRepos($)
+    })
+    $.clock.every(PLAN_MS, () => {
+      void refreshPlan($)
     })
 
     return next(e)
@@ -359,11 +468,11 @@ export const register: Register = (on, options) => {
     return { sections: [...composed.sections, { id: 'task-progress:usage', text: USAGE_PROMPT, scope: 'session' as const }] }
   }).catch((_$, e, next) => next(e))
 
-  // Counts and records what runs (the stale-list counter and the activity share this one hook: two unmatched hooks are refused). It returns exactly what the tool returns and has no `.catch`: a catch handler would
+  // Counts and records what runs (the stale-list counter and the activity share this one hook: two unmatched hooks are refused). It returns what the tool returns (with a stale-list reminder for the model at every 10th main-session call) and has no `.catch`: a catch handler would
   // call `next` again and run a tool twice when the tool itself throws.
   on('tool.call', async ($, e, next) => {
     if (LIST_TOOLS.includes(e.tool)) return next(e)
-    if (e.agentId === undefined) await countCall($)
+    const counted = e.agentId === undefined ? await countCall($) : 0
     callSeq += 1
     const id = `${runId}-${callSeq}`
     await beginCall($, e, id)
@@ -371,7 +480,7 @@ export const register: Register = (on, options) => {
       const ran = await next(e)
       await endCall($, e, id, isOk(ran))
 
-      return ran
+      return e.agentId === undefined && isOk(ran) ? await remind($, ran, counted) : ran
     } catch (error) {
       await endCall($, e, id, false)
       throw error
@@ -391,6 +500,8 @@ export const register: Register = (on, options) => {
       return { text: `Not delivered to ${target.row.name}: ${String(error)}` }
     }
   }).catch((_$, e, next) => next(e))
+
+  on('command.run', { command: 'task-progress-plan' }, async ($, e) => ({ text: await setPlan($, e.args) })).catch((_$, e, next) => next(e))
 
   on('tool.call', { tool: PROGRESS_TOOL }, async ($, e) => {
     if (e.agentId !== undefined) return { result: 'Noted. The pane shows the main session list only.' }
@@ -475,7 +586,7 @@ export const register: Register = (on, options) => {
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     const ui = $.ui.resolve(e)
-    const { Box, Text } = ui
+    const { Box, Button, Text } = ui
     const items = [...(await read($, todos)), ...(await read($, tasks))]
     const { done, total, percent } = summarize(items)
     const now = await $.clock.now()
@@ -491,6 +602,12 @@ export const register: Register = (on, options) => {
     const doing = describeDoing(await read($, activity), now)
     const shownRepos = visibleRepos(await read($, repos))
     const gaugeState = await read($, gauges)
+    const plan = mergePlans(await appliedPlans($))
+    const view = await read($, viewAtom)
+    const isPlanView = plan !== null && view.view === 'plan'
+    const planTasks = plan === null ? 0 : plan.phases.reduce((sum, p) => sum + p.tasks.length, 0)
+    const planDone = plan === null ? 0 : plan.phases.reduce((sum, p) => sum + phaseDoneCount(p), 0)
+    const planPercent = planTasks === 0 ? 0 : Math.round((planDone / planTasks) * 100)
 
     const available = Math.max(1, (e.props.bodyColumns ?? DEFAULT_COLUMNS + 2 * CARD_PADDING) - 2 * CARD_PADDING)
     const inner = Math.min(MAX_SCENE_COLUMNS, available)
@@ -556,16 +673,65 @@ export const register: Register = (on, options) => {
     })
     const moreLine = shownRepos.more > 0 ? <Text color={COLORS.muted}>+{shownRepos.more} repos</Text> : null
     const wanted = present([gaugeLine, doingLine, ...repoLines, moreLine])
-    const strip = wanted.slice(0, stripRoom(bodyRows, layout?.rows ?? 0, blockRows, wanted.length))
+    const strip = wanted.slice(0, stripRoom(bodyRows, layout?.rows ?? 0, blockRows + (plan === null ? 0 : 1), wanted.length))
     const stripBlock = <Box flexDirection="column">{strip}</Box>
-    const room = Math.max(1, bodyRows - CHROME_ROWS - (layout?.rows ?? 0) - blockRows - strip.length)
+    const room = Math.max(1, bodyRows - CHROME_ROWS - (layout?.rows ?? 0) - blockRows - strip.length - (plan === null ? 0 : 1))
     const shownItems = [
       ...items.filter(i => i.status === 'in_progress'),
       ...items.filter(i => i.status !== 'in_progress'),
     ].slice(0, room)
-    const { filled, rest } = barParts(percent, inner)
+    const barPercent = isPlanView ? planPercent : percent
+    const { filled, rest } = barParts(barPercent, inner)
+    const barAccent = barPercent === 100 ? COLORS.success : COLORS.accent
     const accent = percent === 100 ? COLORS.success : COLORS.accent
     const height = e.viewport?.rows === undefined ? undefined : Math.max(1, e.viewport.rows - 1)
+
+    const drawLine = (line: PlanLine) => (
+      <Text bold={line.isBold} color={toneColor(line.tone)}>
+        {line.text}
+      </Text>
+    )
+    const toggleRow =
+      plan === null ? null : (
+        <Box>
+          <Button key="plan-toggle" label={isPlanView ? 'Todo' : 'Plan'} onPress={() => toggleView($)} />
+        </Box>
+      )
+    const current = plan === null ? 0 : currentPhase(plan)
+    const focus = plan === null ? 0 : shownFocus(view.focus, view.pressedAt, now, current, plan.phases.length)
+    // drawn: padding (2) + bar (1) + toggle row (1) + scene + sessions + strip; the header and the focus header are taken from this room
+    const planRoom = Math.max(1, bodyRows - 4 - (layout?.rows ?? 0) - blockRows - strip.length)
+    const listRows = plan === null ? 0 : Math.max(1, Math.min(MAX_LIST_ROWS, plan.phases.length, planRoom - 5))
+    const headerPrefix = `${planPercent}%  ${planDone}/${planTasks} · `
+    // one phase named like the plan: the header and the phase row show the name already
+    const isTitlePhase = plan !== null && plan.phases.length === 1 && plan.phases[0]?.name === plan.title
+    const planBlock =
+      plan === null ? null : (
+        <Box flexDirection="column">
+          <Text>
+            <Text bold color={barAccent}>
+              {planPercent}%
+            </Text>
+            <Text color={COLORS.muted}>
+              {'  '}
+              {planDone}/{planTasks} · {truncate(plan.title, Math.max(1, inner - headerPrefix.length))}
+            </Text>
+          </Text>
+          {stripBlock}
+          {sessionBlock}
+          {phaseLines(plan, focus, current, listRows, inner).map(drawLine)}
+          <Box>
+            <Text color={COLORS.accent}>
+              {phaseNumber(focus)}
+              {isTitlePhase ? '' : ` ${truncate(plan.phases[focus]?.name ?? '', Math.max(1, inner - phaseNumber(focus).length - FOCUS_ROW_FIXED))}`}{' '}
+            </Text>
+            <Button key="plan-prev" label="‹" onPress={() => moveFocus($, -1)} />
+            <Text> </Text>
+            <Button key="plan-next" label="›" onPress={() => moveFocus($, 1)} />
+          </Box>
+          {taskLines(plan, focus, Math.max(1, planRoom - 2 - listRows), inner).map(drawLine)}
+        </Box>
+      )
 
     return (
       <Box
@@ -577,10 +743,11 @@ export const register: Register = (on, options) => {
       >
         {scene}
         <Text>
-          <Text color={accent}>{filled}</Text>
+          <Text color={barAccent}>{filled}</Text>
           <Text color={COLORS.track}>{rest}</Text>
         </Text>
-        {total === 0 ? (
+        {toggleRow}
+        {isPlanView ? planBlock : total === 0 ? (
           <Box flexDirection="column">
             <Text color={COLORS.muted}>No tasks yet. They appear when Claude plans work.</Text>
             {stripBlock}

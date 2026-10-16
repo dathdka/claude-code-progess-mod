@@ -40,8 +40,19 @@ export type RepoStatus = { branch: string; changed: number; ahead: number; behin
 /** A repository the session has edited: its root, when it was last edited, its last good reading, and failed polls in a row. */
 export type Repo = { root: string; touchedAt: number; status: RepoStatus | undefined; failures: number }
 
+/** One task of a plan: its heading, its checkbox counts, and whether it counts as done. `number` is the N of `Task N`, else null. */
+export type PlanTask = { name: string; number: number | null; done: number; total: number; isDone: boolean }
+export type Phase = { name: string; tasks: PlanTask[] }
+export type Plan = { title: string; phases: Phase[] }
+/** A plan file the session follows: its path, what was last parsed from it (null until a read parses), when the session last touched it, and the task numbers its ledger reported complete. */
+export type TrackedPlan = { path: string; plan: Plan | null; lastTouchedAt: number; done: number[] }
+/** The plan files the session follows, in order of first touch, and whether the user pinned one by hand (touches then add none). */
+export type PlanState = { plans: TrackedPlan[]; isPinned: boolean }
+/** Which view the pane shows, which phase the user moved the focus to (null follows the current phase), and when. */
+export type PlanView = { view: 'todo' | 'plan'; focus: number | null; pressedAt: number }
+
 declare module 'claude-code' {
   interface PluginState {
-    'task-progress': { todos: Item[]; tasks: Item[]; startedAt: number; finishedAt: number; idleCalls: number; sessions: SessionRow[]; gauges: GaugeState | null; activity: Activity; repos: Repo[] }
+    'task-progress': { todos: Item[]; tasks: Item[]; startedAt: number; finishedAt: number; idleCalls: number; sessions: SessionRow[]; gauges: GaugeState | null; activity: Activity; repos: Repo[]; plan: PlanState | null; planView: PlanView }
   }
 }

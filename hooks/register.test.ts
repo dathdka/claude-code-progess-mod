@@ -1370,3 +1370,819 @@ test('a slow git never delays the result of an Edit', async ($, on) => {
 
   expect(wasDone).toBe(true)
 })
+
+const PLAN_PATH = '/w/docs/plans/demo.md'
+const PLAN_TEXT = `# Demo plan
+
+## Phase 1: Base
+### Task 1: A
+- [x] a1
+- [x] a2
+### Task 2: B
+- [ ] b1
+
+## Phase 2: Next
+### Task 3: C
+- [ ] c1
+`
+
+async function planSetup($: Engine, on: On, text = PLAN_TEXT) {
+  const clock = mock.clock(on, { now: NOW })
+  on('ui.status', () => ({ value: undefined }))
+  on('tool.call', { tool: 'Read' }, () => ({ result: 'ok' }))
+  on('tool.call', { tool: 'Edit' }, () => ({ result: 'ok' }))
+  on('tool.call', { tool: 'Write' }, () => ({ result: 'ok' }))
+  on('tool.call', { tool: 'TodoWrite' }, () => ({ result: { oldTodos: [], newTodos: [] } }))
+  const disk = mockDisk(on)
+  disk.put(PLAN_PATH, text)
+  await boot($)
+  await clock.settle()
+
+  return { clock, disk }
+}
+
+const readPlan = async ($: Engine, clock: { settle: () => Promise<void> }) => {
+  await $.tool.call({ tool: 'Read', file_path: PLAN_PATH } as never)
+  await clock.settle()
+}
+
+test('there is no plan button until the session touches a plan file', async ($, on) => {
+  const { clock } = await planSetup($, on)
+  await $.tool.call({ tool: 'Read', file_path: '/w/docs/notes.md' } as never)
+  await clock.settle()
+  let ui = await mountPane($)
+  expect(await ui.find({ key: 'plan-toggle' })).toBeUndefined()
+  await ui.unmount()
+
+  await readPlan($, clock)
+  ui = await mountPane($)
+  expect(await ui.find({ key: 'plan-toggle' })).toBeDefined()
+  await ui.unmount()
+})
+
+test('pressing Plan shows the phases and the focused phase, pressing Todo goes back', async ($, on) => {
+  const { clock } = await planSetup($, on)
+  await readPlan($, clock)
+  const ui = await mountPane($)
+
+  await ui.press({ key: 'plan-toggle' })
+  expect(await ui.find({ type: 'Text', text: /Phase 1: Base/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /Phase 2: Next/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /Task 2: B/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /No tasks yet/ })).toBeUndefined()
+
+  await ui.press({ key: 'plan-toggle' })
+  expect(await ui.find({ type: 'Text', text: /Phase 1: Base/ })).toBeUndefined()
+  expect(await ui.find({ type: 'Text', text: /No tasks yet/ })).toBeDefined()
+  await ui.unmount()
+})
+
+test('a completed todo "Task N" marks the plan task done', async ($, on) => {
+  const { clock } = await planSetup($, on)
+  await readPlan($, clock)
+  await $.tool.call({ tool: 'TodoWrite', todos: [{ content: 'Task 2: B', status: 'completed', activeForm: 'B' }] } as never)
+  const ui = await mountPane($)
+  await ui.press({ key: 'plan-toggle' })
+
+  expect(await ui.find({ type: 'Text', text: /① Phase 1: Base +✔ 2\/2/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /② Phase 2: Next +▶ 0\/1/ })).toBeDefined()
+  await ui.unmount()
+})
+
+test('the plan file is read again every 5 seconds and when the session writes it', async ($, on) => {
+  const { clock, disk } = await planSetup($, on)
+  await readPlan($, clock)
+  disk.put(PLAN_PATH, PLAN_TEXT.replace('- [ ] b1', '- [x] b1'))
+  await clock.advance(5000)
+  let ui = await mountPane($)
+  await ui.press({ key: 'plan-toggle' })
+  expect(await ui.find({ type: 'Text', text: /① Phase 1: Base +✔ 2\/2/ })).toBeDefined()
+  await ui.unmount()
+
+  disk.put(PLAN_PATH, PLAN_TEXT.replace('- [ ] c1', '- [x] c1'))
+  await $.tool.call({ tool: 'Edit', file_path: PLAN_PATH, old_string: 'a', new_string: 'b' } as never)
+  await clock.settle()
+  ui = await mountPane($)
+  expect(await ui.find({ type: 'Text', text: /② Phase 2: Next +✔ 1\/1/ })).toBeDefined()
+  await ui.unmount()
+})
+
+test('a plan file that vanishes or turns to junk keeps the last plan', async ($, on) => {
+  const { clock, disk } = await planSetup($, on)
+  await readPlan($, clock)
+  disk.files.delete(PLAN_PATH)
+  await clock.advance(5000)
+  disk.put(PLAN_PATH, 'no tasks here\n')
+  await clock.advance(5000)
+  let ui = await mountPane($)
+  await ui.press({ key: 'plan-toggle' })
+  expect(await ui.find({ type: 'Text', text: /Phase 1: Base/ })).toBeDefined()
+  await ui.unmount()
+
+  disk.put(PLAN_PATH, PLAN_TEXT.replace('- [ ] b1', '- [x] b1'))
+  await clock.advance(5000)
+  ui = await mountPane($)
+  // the view stays on Plan across mounts
+  expect(await ui.find({ type: 'Text', text: /① Phase 1: Base +✔ 2\/2/ })).toBeDefined()
+  await ui.unmount()
+})
+
+const FIVE_PLAN = `# Five plan
+
+${[1, 2, 3, 4, 5].map(n => `## Phase ${n}: P${n}\n### Task ${n}: t${n}\n- [ ] x${n}\n- [ ] y${n}\n`).join('\n')}`
+
+const mountPlanPane = ($: Engine, bodyRows: number) =>
+  $.ui.mount({
+    plugin: 'task-progress',
+    surface: 'terminal',
+    component: 'Pane',
+    props: { ...PANE_PROPS, bodyColumns: 98, scroll: { bodyRows } } as never,
+    requestId: 'task-progress',
+  })
+
+const textsOf = async (ui: Awaited<ReturnType<typeof mountPlanPane>>, text: RegExp) =>
+  (await ui.findAll({ type: 'Text', text })).length
+
+test('a short pane shows the plan view with its focus header and a task row at least', async ($, on) => {
+  const { clock } = await planSetup($, on)
+  await readPlan($, clock)
+  const ui = await mountPlanPane($, 12)
+  await ui.press({ key: 'plan-toggle' })
+
+  expect(await ui.find({ type: 'Text', text: /Task 2: B/ })).toBeDefined()
+  expect(await textsOf(ui, /^① Phase 1: Base +$/)).toBe(1)
+  expect(await textsOf(ui, /^[①②] Phase [12]: /)).toBe(3)
+  await ui.unmount()
+})
+
+test('a 35-row pane with a scene and a 3-line strip lists all five phases', async ($, on) => {
+  const { clock, disk } = await planSetup($, on, FIVE_PLAN)
+  gitWorld(disk, { '/w/svc-a': '/w/svc-a', '/w/svc-b': '/w/svc-b' }, { '/w/svc-a': '## main\n', '/w/svc-b': '## main\n' })
+  await $.tool.call({ tool: 'Edit', file_path: '/w/svc-a/a.ts', old_string: 'a', new_string: 'b' } as never)
+  await clock.settle()
+  await $.tool.call({ tool: 'Edit', file_path: '/w/svc-b/a.ts', old_string: 'a', new_string: 'b' } as never)
+  await clock.settle()
+  await readPlan($, clock)
+  const ui = await mountPlanPane($, 35)
+  await ui.press({ key: 'plan-toggle' })
+
+  expect(await ui.find({ type: 'Raster' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /svc-b/ })).toBeDefined()
+  for (const n of [1, 2, 3, 4, 5]) expect(await ui.find({ type: 'Text', text: new RegExp(`Phase ${n}: P${n}`) })).toBeDefined()
+  await ui.unmount()
+})
+
+test('the toggle label flips between Plan and Todo', async ($, on) => {
+  const { clock } = await planSetup($, on)
+  await readPlan($, clock)
+  const ui = await mountPane($)
+  expect((await ui.find({ key: 'plan-toggle' }))?.props.label).toBe('Plan')
+  await ui.press({ key: 'plan-toggle' })
+  expect((await ui.find({ key: 'plan-toggle' }))?.props.label).toBe('Todo')
+  await ui.unmount()
+})
+
+test('the focus buttons move one phase per press and stay inside the plan', async ($, on) => {
+  const { clock } = await planSetup($, on, FIVE_PLAN)
+  await readPlan($, clock)
+  const ui = await mountPane($)
+  await ui.press({ key: 'plan-toggle' })
+  const header = (n: string) => textsOf(ui, new RegExp(`^${n} Phase ${'①②③④⑤'.indexOf(n) + 1}: P[0-9] +$`))
+
+  await ui.press({ key: 'plan-next' })
+  await ui.press({ key: 'plan-next' })
+  expect(await header('③')).toBe(1)
+  for (let i = 0; i < 6; i += 1) await ui.press({ key: 'plan-next' })
+  expect(await header('⑤')).toBe(1)
+  for (let i = 0; i < 8; i += 1) await ui.press({ key: 'plan-prev' })
+  expect(await header('①')).toBe(1)
+  await ui.unmount()
+})
+
+test('a Write on the plan file reads it again at once', async ($, on) => {
+  const { clock, disk } = await planSetup($, on)
+  await readPlan($, clock)
+  disk.put(PLAN_PATH, PLAN_TEXT.replace('- [ ] c1', '- [x] c1'))
+  await $.tool.call({ tool: 'Write', file_path: PLAN_PATH, content: 'x' } as never)
+  await clock.settle()
+  const ui = await mountPane($)
+  await ui.press({ key: 'plan-toggle' })
+
+  expect(await ui.find({ type: 'Text', text: /② Phase 2: Next +✔ 1\/1/ })).toBeDefined()
+  await ui.unmount()
+})
+
+test('a second plan touched while the first is still being read is not dropped: both are tracked', async ($, on) => {
+  const { clock, disk } = await planSetup($, on)
+  disk.put('/w/docs/plans/other.md', PLAN_TEXT.replace('# Demo plan', '# Other plan'))
+  await $.tool.call({ tool: 'Read', file_path: PLAN_PATH } as never)
+  await $.tool.call({ tool: 'Read', file_path: '/w/docs/plans/other.md' } as never)
+  await clock.settle()
+  const ui = await mountPane($)
+  await ui.press({ key: 'plan-toggle' })
+
+  expect(await ui.find({ type: 'Text', text: /^③ Other plan: Phase 1: Base/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /^① Demo plan: Phase 1: Base/ })).toBeDefined()
+  await ui.unmount()
+})
+
+const BIG_PLAN = (finished: number) =>
+  `# Big\n\n${[1, 2, 3].map(p => `## Phase ${p}: P${p}\n${[1, 2, 3, 4].map(t => `### Task ${(p - 1) * 4 + t}: t\n- [${(p - 1) * 4 + t <= finished ? 'x' : ' '}] a\n`).join('')}\n`).join('')}`
+
+test('a minute after the last arrow press the focus returns to the current phase', async ($, on) => {
+  const { clock } = await planSetup($, on, BIG_PLAN(4))
+  await readPlan($, clock)
+  const ui = await mountPane($)
+  await ui.press({ key: 'plan-toggle' })
+  const header = (n: string, p: number) => textsOf(ui, new RegExp(`^${n} Phase ${p}: P${p} +$`))
+
+  expect(await header('②', 2)).toBe(1)
+  await ui.press({ key: 'plan-next' })
+  await ui.press({ key: 'plan-next' })
+  await ui.press({ key: 'plan-next' })
+  expect(await header('③', 3)).toBe(1)
+  for (let i = 0; i < 4; i += 1) await ui.press({ key: 'plan-prev' })
+  expect(await header('①', 1)).toBe(1)
+
+  await clock.advance(61_000)
+  await ui.unmount()
+  const again = await mountPane($)
+  expect(await textsOf(again, /^② Phase 2: P2 +$/)).toBe(1)
+  await again.unmount()
+})
+
+test('a phase that becomes complete raises one toast, phases complete at the first read raise none', async ($, on) => {
+  const toasts: string[] = []
+  on('ui.toast', (_$, e) => {
+    toasts.push(e.text)
+
+    return { value: undefined }
+  })
+  const { clock, disk } = await planSetup($, on, BIG_PLAN(4))
+  await readPlan($, clock)
+  expect(toasts).toEqual([])
+
+  disk.put(PLAN_PATH, BIG_PLAN(8))
+  await clock.advance(5000)
+  expect(toasts).toEqual(['Phase ② Phase 2: P2 done (4/4)'])
+  await clock.advance(10_000)
+  expect(toasts.length).toBe(1)
+
+  const done = (n: number) => ({ content: `Task ${n}: x`, status: 'completed', activeForm: 'x' })
+  await $.tool.call({ tool: 'TodoWrite', todos: [9, 10, 11, 12].map(done) } as never)
+  await clock.settle()
+  expect(toasts).toEqual(['Phase ② Phase 2: P2 done (4/4)', 'Phase ③ Phase 3: P3 done (4/4)'])
+})
+
+test('a toast that fails never breaks the plan read', async ($, on) => {
+  let calls = 0
+  on('ui.toast', () => {
+    calls += 1
+    throw new Error('no terminal')
+  })
+  const { clock, disk } = await planSetup($, on, BIG_PLAN(4))
+  await readPlan($, clock)
+  disk.put(PLAN_PATH, BIG_PLAN(8))
+  await clock.advance(5000)
+  const ui = await mountPane($)
+  await ui.press({ key: 'plan-toggle' })
+
+  expect(calls).toBeGreaterThan(0)
+  expect(await textsOf(ui, /P3/)).toBeGreaterThan(0)
+  await ui.unmount()
+})
+
+const toastLog = (on: On) => {
+  const toasts: string[] = []
+  on('ui.toast', (_$, e) => {
+    toasts.push(e.text)
+
+    return { value: undefined }
+  })
+
+  return toasts
+}
+
+test('stopping the plan and following it again raises no toast for a phase finished meanwhile', async ($, on) => {
+  const toasts = toastLog(on)
+  const { clock, disk } = await planSetup($, on, BIG_PLAN(4))
+  const run = (args: string) => $.command.run({ command: 'task-progress-plan', args } as never)
+  await run(PLAN_PATH)
+  await clock.settle()
+  await run('off')
+  disk.put(PLAN_PATH, BIG_PLAN(8))
+  await run(PLAN_PATH)
+  await clock.advance(10_000)
+
+  expect(toasts).toEqual([])
+})
+
+test('a phase that goes complete, incomplete, complete again raises one toast', async ($, on) => {
+  const toasts = toastLog(on)
+  const { clock, disk } = await planSetup($, on, BIG_PLAN(4))
+  await readPlan($, clock)
+  disk.put(PLAN_PATH, BIG_PLAN(8))
+  await clock.advance(5000)
+  disk.put(PLAN_PATH, BIG_PLAN(7))
+  await clock.advance(5000)
+  disk.put(PLAN_PATH, BIG_PLAN(8))
+  await clock.advance(5000)
+
+  expect(toasts).toEqual(['Phase ② Phase 2: P2 done (4/4)'])
+})
+
+test('a phase inserted or renamed in the file raises no toast for phases that were already complete', async ($, on) => {
+  const toasts = toastLog(on)
+  const { clock, disk } = await planSetup($, on, BIG_PLAN(8))
+  await readPlan($, clock)
+  disk.put(PLAN_PATH, BIG_PLAN(8).replace('## Phase 1: P1', '## Phase 0: Z\n### Task 99: z\n- [x] z\n\n## Phase 1: P1'))
+  await clock.advance(5000)
+  disk.put(PLAN_PATH, BIG_PLAN(8).replace('## Phase 1: P1', '## Phase 1: Renamed'))
+  await clock.advance(5000)
+
+  expect(toasts).toEqual([])
+})
+
+test('adding a second plan that is already complete raises no toast', async ($, on) => {
+  const toasts = toastLog(on)
+  const { clock, disk } = await planSetup($, on, BIG_PLAN(4))
+  disk.put('/w/docs/plans/two.md', BIG_PLAN(12))
+  await readPlan($, clock)
+  await $.tool.call({ tool: 'Read', file_path: '/w/docs/plans/two.md' } as never)
+  await clock.advance(10_000)
+
+  expect(toasts).toEqual([])
+})
+
+test('the plan command pins a file, turns tracking off, and refuses a path that is not absolute, not Markdown or with control characters', async ($, on) => {
+  const { clock, disk } = await planSetup($, on)
+  disk.put('/w/other/plans/x.md', PLAN_TEXT.replace('# Demo plan', '# Other plan'))
+  const run = async (args: string) => JSON.stringify(await $.command.run({ command: 'task-progress-plan', args } as never))
+  expect(await run('docs/plan.md')).toContain('absolute')
+  expect(await run('/w/notes.txt')).toContain('.md')
+  expect(await run('/w/a\nb.md')).toContain('control')
+
+  expect(await run(PLAN_PATH)).toContain('Following')
+  await clock.settle()
+  let ui = await mountPane($)
+  expect(await ui.find({ key: 'plan-toggle' })).toBeDefined()
+  await ui.unmount()
+
+  await $.tool.call({ tool: 'Read', file_path: '/w/other/plans/x.md' } as never)
+  await clock.settle()
+  ui = await mountPane($)
+  await ui.press({ key: 'plan-toggle' })
+  expect(await textsOf(ui, /Phase 1: Base/)).toBeGreaterThan(0)
+  expect(await textsOf(ui, /Other plan/)).toBe(0)
+  await ui.unmount()
+
+  expect(await run('off')).toContain('stopped')
+  ui = await mountPane($)
+  expect(await ui.find({ key: 'plan-toggle' })).toBeUndefined()
+  await ui.unmount()
+})
+
+test('the system prompt asks the model to tick the boxes of the plan it follows', async ($, on) => {
+  on('prompt.compose', () => ({ sections: [] }))
+  const input = { model: 'm', promptModel: 'm', surfaces: ['terminal'], tools: [PROGRESS], outputStyle: null, traits: [] }
+  const { sections } = await $.prompt.compose(input as never)
+
+  expect(sections.find(s => s.id === 'task-progress:usage')?.text).toContain('tick')
+})
+
+test('a subagent that reads another plan file adds nothing to the main pane plans, the main session adds it', async ($, on) => {
+  const { clock, disk } = await planSetup($, on)
+  disk.put('/w/docs/plans/other.md', PLAN_TEXT.replace('# Demo plan', '# Other plan'))
+  await readPlan($, clock)
+  await $.tool.call({ tool: 'Read', file_path: '/w/docs/plans/other.md', agentId: SUBAGENT } as never)
+  await clock.settle()
+  let ui = await mountPane($)
+  await ui.press({ key: 'plan-toggle' })
+  expect(await textsOf(ui, /Demo plan/)).toBeGreaterThan(0) // A
+  expect(await textsOf(ui, /Other plan/)).toBe(0)
+  await ui.unmount()
+
+  await $.tool.call({ tool: 'Read', file_path: '/w/docs/plans/other.md' } as never)
+  await clock.settle()
+  ui = await mountPane($)
+  expect(await textsOf(ui, /Other plan/)).toBeGreaterThan(0)
+  expect(await textsOf(ui, /Demo plan/)).toBeGreaterThan(0)
+  expect(await textsOf(ui, /^\d+%  \d+\/\d+ · 2 plans$/)).toBe(1)
+  await ui.unmount()
+})
+
+test('the plan header and the focus header fit the inner width when the title and the phase name are long', async ($, on) => {
+  const long = 'L'.repeat(60)
+  // two phases, so the focus header shows the focused phase's name
+  const text = `# ${long}\n\n## ${long}\n### Task 1: t\n- [x] a\n\n## ${long}2\n### Task 2: t\n- [x] b\n`
+  const { clock } = await planSetup($, on, text)
+  await readPlan($, clock)
+  const width = 48 // bodyColumns 50 minus the padding
+  const narrow = await $.ui.mount({
+    plugin: 'task-progress',
+    surface: 'terminal',
+    component: 'Pane',
+    props: { ...PANE_PROPS, bodyColumns: 50, scroll: { bodyRows: 40 } } as never,
+    requestId: 'task-progress',
+  })
+  await narrow.press({ key: 'plan-toggle' })
+  const focus = (await narrow.findAll({ type: 'Text', text: /^② L+…? $/ }))[0]
+  const header = (await narrow.findAll({ type: 'Text', text: /\d+\/\d+ · L/ }))[0]
+  // the buttons draw as `[ ‹ ]` and `[ › ]` (5 columns each) with one column between and one after the name
+  expect(focus).toBeDefined()
+  expect(header).toBeDefined()
+  expect((focus?.text ?? '').length + 5 + 1 + 5).toBeLessThanOrEqual(width)
+  expect((header?.text ?? '').length).toBeLessThanOrEqual(width)
+  await narrow.unmount()
+})
+
+test('with a tracked plan the todo view still draws no more rows than the pane has', async ($, on) => {
+  mockUsage(on, { value: gaugeUsage(62) })
+  const { clock, disk } = await planSetup($, on)
+  gitWorld(disk, { '/w/a': '/w/a', '/w/b': '/w/b', '/w/c': '/w/c' }, { '/w/a': '## main\n', '/w/b': '## main\n', '/w/c': '## main\n' })
+  for (const r of ['a', 'b', 'c']) {
+    await $.tool.call({ tool: 'Edit', file_path: `/w/${r}/a.ts`, old_string: 'a', new_string: 'b' } as never)
+    await clock.settle()
+  }
+  await readPlan($, clock)
+  await $.tool.call({ tool: 'TodoWrite', todos: [1, 2, 3, 4].map(n => ({ content: `todo ${n}`, status: 'pending', activeForm: 'x' })) } as never)
+  await clock.settle()
+  const ui = await mountPlanPane($, 12)
+  const stripRows = (await ui.findAll({ type: 'Text', text: /^⎇/ })).length + ((await ui.find({ type: 'Text', text: /ctx/ })) === undefined ? 0 : 1)
+  const taskRows = (await ui.findAll({ type: 'Text', text: /^todo \d/ })).length
+
+  // 12 rows = 7 chrome + the toggle row + what the strip and the tasks may use (4), and one task row stays
+  expect(taskRows).toBeGreaterThanOrEqual(1)
+  expect(stripRows + taskRows).toBeLessThanOrEqual(4)
+  await ui.unmount()
+})
+
+const SINGLE = (title: string, done = false) => `# ${title}\n\n### Task 1: a\n- [x] a\n### Task 2: b\n- [${done ? 'x' : ' '}] b\n`
+const touchPlans = async ($: Engine, disk: Disk, clock: { settle: () => Promise<void> }, plans: Record<string, string>) => {
+  for (const [name, text] of Object.entries(plans)) {
+    disk.put(`/w/docs/plans/${name}.md`, text)
+    await $.tool.call({ tool: 'Read', file_path: `/w/docs/plans/${name}.md` } as never)
+    await clock.settle()
+  }
+}
+const headerIs = async (ui: Awaited<ReturnType<typeof mountPane>>, title: string) => textsOf(ui, new RegExp(`^\\d+%  \\d+/\\d+ · ${title}$`))
+const openPlanView = async ($: Engine) => {
+  const ui = await mountPane($)
+  await ui.press({ key: 'plan-toggle' })
+
+  return ui
+}
+
+test('two plans touched by the main session are two phases under the header "2 plans", a third is added after them', async ($, on) => {
+  const { clock, disk } = await planSetup($, on)
+  await touchPlans($, disk, clock, { alpha: SINGLE('Alpha'), beta: SINGLE('Beta') })
+  let ui = await openPlanView($)
+  expect(await headerIs(ui, '2 plans')).toBe(1)
+  expect(await textsOf(ui, /^① Alpha +▶ 1\/2/)).toBe(1)
+  expect(await textsOf(ui, /^② Beta +○ 1\/2/)).toBe(1)
+  await ui.unmount()
+
+  await touchPlans($, disk, clock, { gamma: SINGLE('Gamma'), alpha: SINGLE('Alpha') })
+  ui = await mountPane($)
+  expect(await headerIs(ui, '3 plans')).toBe(1)
+  expect(await textsOf(ui, /^① Alpha +▶/)).toBe(1)
+  expect(await textsOf(ui, /^③ Gamma +○/)).toBe(1)
+  await ui.unmount()
+})
+
+test('at most 10 plans are tracked: an eleventh drops the one touched first', async ($, on) => {
+  const { clock, disk } = await planSetup($, on)
+  const names = 'abcdefghijk'.split('')
+  await touchPlans($, disk, clock, Object.fromEntries(names.map(n => [n, SINGLE(`Plan ${n}`, n !== 'k')])))
+  const ui = await openPlanView($)
+  expect(await headerIs(ui, '10 plans')).toBe(1)
+  for (let i = 0; i < 12; i += 1) await ui.press({ key: 'plan-prev' })
+  expect(await textsOf(ui, /^① Plan b +$/)).toBe(1)
+  await ui.unmount()
+})
+
+test('pinning a plan replaces the list, and later touches add nothing', async ($, on) => {
+  const { clock, disk } = await planSetup($, on)
+  await touchPlans($, disk, clock, { alpha: SINGLE('Alpha'), beta: SINGLE('Beta') })
+  disk.put('/w/docs/plans/gamma.md', SINGLE('Gamma'))
+  await $.command.run({ command: 'task-progress-plan', args: '/w/docs/plans/gamma.md' } as never)
+  await touchPlans($, disk, clock, { delta: SINGLE('Delta') })
+  const ui = await openPlanView($)
+
+  expect(await headerIs(ui, 'Gamma')).toBe(1)
+  expect(await textsOf(ui, /Alpha|Beta|Delta|plans/)).toBe(0)
+  await ui.unmount()
+})
+
+test('one plan that cannot be read keeps its last parse while another updates', async ($, on) => {
+  const { clock, disk } = await planSetup($, on)
+  await touchPlans($, disk, clock, { alpha: SINGLE('Alpha'), beta: SINGLE('Beta') })
+  disk.files.delete('/w/docs/plans/alpha.md')
+  disk.put('/w/docs/plans/beta.md', SINGLE('Beta', true))
+  await clock.advance(5000)
+  const ui = await openPlanView($)
+
+  expect(await textsOf(ui, /^① Alpha +▶ 1\/2/)).toBe(1)
+  expect(await textsOf(ui, /^② Beta +✔ 2\/2/)).toBe(1)
+  await ui.unmount()
+})
+
+test('a plan with several ## phases adds them as "<title>: <phase>" after a single-phase plan', async ($, on) => {
+  const { clock, disk } = await planSetup($, on)
+  await touchPlans($, disk, clock, { alpha: SINGLE('Alpha') })
+  await readPlan($, clock)
+  const ui = await openPlanView($)
+
+  expect(await textsOf(ui, /^① Alpha +▶/)).toBe(1)
+  expect(await textsOf(ui, /^② Demo plan: Phase 1: Base +○/)).toBe(1)
+  expect(await textsOf(ui, /^③ Demo plan: Phase 2: Next +○/)).toBe(1)
+  await ui.unmount()
+})
+
+test('completing the phase of a second plan raises one toast, adding a plan that is already complete raises none', async ($, on) => {
+  const toasts = toastLog(on)
+  const { clock, disk } = await planSetup($, on)
+  await touchPlans($, disk, clock, { alpha: SINGLE('Alpha'), beta: SINGLE('Beta') })
+  disk.put('/w/docs/plans/beta.md', SINGLE('Beta', true))
+  await clock.advance(5000)
+  await clock.advance(5000)
+  expect(toasts).toEqual(['Phase ② Beta done (2/2)'])
+
+  await touchPlans($, disk, clock, { gamma: SINGLE('Gamma', true) })
+  await clock.advance(5000)
+  expect(toasts).toEqual(['Phase ② Beta done (2/2)'])
+})
+
+test('completed todo "Task N" entries mark only the plan touched most recently, and toast only its phase', async ($, on) => {
+  const toasts = toastLog(on)
+  const { clock, disk } = await planSetup($, on)
+  await touchPlans($, disk, clock, { alpha: SINGLE('Alpha') })
+  await clock.advance(10)
+  await touchPlans($, disk, clock, { beta: SINGLE('Beta') })
+  const done = (n: number) => ({ content: `Task ${n}: x`, status: 'completed', activeForm: 'x' })
+  await $.tool.call({ tool: 'TodoWrite', todos: [1, 2, 3].map(done) } as never)
+  await clock.settle()
+  const ui = await openPlanView($)
+
+  expect(await textsOf(ui, /^① Alpha +▶ 1\/2/)).toBe(1)
+  expect(await textsOf(ui, /^② Beta +✔ 2\/2/)).toBe(1)
+  expect(toasts).toEqual(['Phase ② Beta done (2/2)'])
+  await ui.unmount()
+})
+
+test('with one single-phase plan the focus header does not repeat the name the header and the phase row show', async ($, on) => {
+  const { clock, disk } = await planSetup($, on)
+  await touchPlans($, disk, clock, { alpha: SINGLE('Alpha') })
+  const ui = await openPlanView($)
+
+  expect(await textsOf(ui, /^① +$/)).toBe(1)
+  expect(await textsOf(ui, /^① Alpha +▶/)).toBe(1)
+  expect(await ui.find({ key: 'plan-next' })).toBeDefined()
+  await ui.unmount()
+})
+
+test('a todo update and a plan read that overlap announce a newly complete phase once', async ($, on) => {
+  const toasts = toastLog(on)
+  const { clock } = await planSetup($, on, BIG_PLAN(4))
+  await readPlan($, clock)
+  const done = (n: number) => ({ content: `Task ${n}: x`, status: 'completed', activeForm: 'x' })
+  await Promise.all([$.tool.call({ tool: 'TodoWrite', todos: [5, 6, 7, 8].map(done) } as never), clock.advance(5000)])
+  await clock.settle()
+
+  expect(toasts).toEqual(['Phase ② Phase 2: P2 done (4/4)'])
+})
+
+test('one phased plan keeps its phase names, a second plan prefixes both plans\' phases with their titles', async ($, on) => {
+  const { clock, disk } = await planSetup($, on)
+  await readPlan($, clock)
+  let ui = await openPlanView($)
+  expect(await headerIs(ui, 'Demo plan')).toBe(1)
+  expect(await textsOf(ui, /^① Phase 1: Base +▶/)).toBe(1)
+  expect(await textsOf(ui, /^② Phase 2: Next +○/)).toBe(1)
+  await ui.unmount()
+
+  await touchPlans($, disk, clock, { beta: SINGLE('Beta') })
+  ui = await mountPane($)
+  expect(await headerIs(ui, '2 plans')).toBe(1)
+  expect(await textsOf(ui, /^① Demo plan: Phase 1: Base +▶/)).toBe(1)
+  expect(await textsOf(ui, /^② Demo plan: Phase 2: Next +○/)).toBe(1)
+  expect(await textsOf(ui, /^③ Beta +○/)).toBe(1)
+  await ui.unmount()
+})
+
+test('a plan state of the old single-plan shape left by an earlier load does not block new plans', async ($, on) => {
+  // the value an earlier load wrote stands until this load writes the atom (tests cannot write another load's state directly)
+  let isWritten = false
+  on('state.set', { plugin: 'task-progress', key: 'plan' } as never, async (_$, e, next) => {
+    isWritten = true
+
+    return next(e)
+  })
+  on('state.get', { plugin: 'task-progress', key: 'plan' } as never, async (_$, e, next) => {
+    const held = await next(e)
+
+    return isWritten ? held : { ...held, value: { ...held.value, value: { path: PLAN_PATH, plan: null, isPinned: false } } as never }
+  })
+  const { clock } = await planSetup($, on)
+  await readPlan($, clock)
+  const ui = await openPlanView($)
+
+  expect(await textsOf(ui, /^① Phase 1: Base +▶/)).toBe(1)
+  await ui.unmount()
+})
+
+test('beyond 10 plans the one touched least recently is dropped, not the one touched first', async ($, on) => {
+  const { clock, disk } = await planSetup($, on)
+  const names = 'abcdefghij'.split('')
+  for (const n of names) {
+    await touchPlans($, disk, clock, { [n]: SINGLE(`Plan ${n}`) })
+    await clock.advance(10)
+  }
+  await touchPlans($, disk, clock, { a: SINGLE('Plan a') })
+  await clock.advance(10)
+  await touchPlans($, disk, clock, { k: SINGLE('Plan k') })
+  const ui = await openPlanView($)
+
+  expect(await headerIs(ui, '10 plans')).toBe(1)
+  expect(await textsOf(ui, /^① Plan a +▶/)).toBe(1)
+  expect(await textsOf(ui, /^② Plan c +○/)).toBe(1)
+  await ui.unmount()
+})
+
+test('when a plan leaves the list the focus returns to the current phase, so it never lands in another plan', async ($, on) => {
+  const { clock, disk } = await planSetup($, on)
+  await touchPlans($, disk, clock, Object.fromEntries('abcdefghij'.split('').map(n => [n, SINGLE(`Plan ${n}`)])))
+  const ui = await openPlanView($)
+  for (let i = 0; i < 5; i += 1) await ui.press({ key: 'plan-next' })
+  expect(await textsOf(ui, /^⑥ Plan f +$/)).toBe(1)
+  await touchPlans($, disk, clock, { k: SINGLE('Plan k') })
+  await ui.unmount()
+  const again = await mountPane($)
+
+  expect(await textsOf(again, /^① Plan b +$/)).toBe(1)
+  await again.unmount()
+})
+
+test('two todo updates at once announce a newly complete phase once', async ($, on) => {
+  const toasts = toastLog(on)
+  const { clock } = await planSetup($, on, BIG_PLAN(4))
+  await readPlan($, clock)
+  const done = (n: number) => ({ content: `Task ${n}: x`, status: 'completed', activeForm: 'x' })
+  const write = () => $.tool.call({ tool: 'TodoWrite', todos: [5, 6, 7, 8].map(done) } as never)
+  await Promise.all([write(), write()])
+  await clock.settle()
+
+  expect(toasts).toEqual(['Phase ② Phase 2: P2 done (4/4)'])
+})
+
+const SDD_PLAN = (name: string) => `/w/docs/superpowers/plans/${name}.md`
+const LEDGER = (name: string) => `/w/.superpowers/sdd/${name}/progress.md`
+const LEDGER_HEAD = (name: string) => `# SDD ledger — plan: docs/superpowers/plans/${name}.md\n`
+const readSddPlan = async ($: Engine, disk: Disk, clock: { settle: () => Promise<void> }, name: string, text: string) => {
+  disk.put(SDD_PLAN(name), text)
+  await $.tool.call({ tool: 'Read', file_path: SDD_PLAN(name) } as never)
+  await clock.settle()
+}
+
+test('a subagent-driven ledger beside the plan marks its tasks done, and they stay done when the ledger goes', async ($, on) => {
+  const toasts = toastLog(on)
+  const { clock, disk } = await planSetup($, on)
+  disk.put(LEDGER('alpha'), `${LEDGER_HEAD('alpha')}Task 2: complete (commits abc)\nTask 1: fix round 1\n`)
+  await readSddPlan($, disk, clock, 'alpha', SINGLE('Alpha'))
+  let ui = await openPlanView($)
+  expect(await textsOf(ui, /^① Alpha +✔ 2\/2/)).toBe(1)
+  await ui.unmount()
+
+  disk.files.delete(LEDGER('alpha'))
+  await clock.advance(5000)
+  ui = await mountPane($)
+  expect(await textsOf(ui, /^① Alpha +✔ 2\/2/)).toBe(1)
+  await ui.unmount()
+  // complete at the first read: a silent baseline
+  expect(toasts).toEqual([])
+})
+
+test('the ledger of one plan does not mark the tasks of another', async ($, on) => {
+  const { clock, disk } = await planSetup($, on)
+  disk.put(LEDGER('alpha'), `${LEDGER_HEAD('alpha')}Task 2: complete\n`)
+  await readSddPlan($, disk, clock, 'alpha', SINGLE('Alpha'))
+  await readSddPlan($, disk, clock, 'beta', SINGLE('Beta'))
+  const ui = await openPlanView($)
+
+  expect(await textsOf(ui, /^① Alpha +✔ 2\/2/)).toBe(1)
+  expect(await textsOf(ui, /^② Beta +▶ 1\/2/)).toBe(1)
+  await ui.unmount()
+})
+
+test('a phase completed through the ledger raises one toast', async ($, on) => {
+  const toasts = toastLog(on)
+  const { clock, disk } = await planSetup($, on)
+  await readSddPlan($, disk, clock, 'alpha', SINGLE('Alpha'))
+  await readSddPlan($, disk, clock, 'beta', SINGLE('Beta'))
+  disk.put(LEDGER('beta'), `${LEDGER_HEAD('beta')}Task 2: complete\n`)
+  await clock.advance(5000)
+  await clock.advance(5000)
+
+  expect(toasts).toEqual(['Phase ② Beta done (2/2)'])
+})
+
+const REMINDER = /^task-progress: the pane's task list has not been updated for (\d+) tool calls while a task is in progress\. Call mcp__task-progress__progress now/
+const remindSetup = (on: On) => {
+  mock.clock(on, { now: NOW })
+  on('ui.status', () => ({ value: undefined }))
+  on('tool.call', { tool: 'Read' }, () => ({ result: 'ok', ref: 7, context: ['core note'] }) as never)
+  on('tool.call', { tool: 'Bash' }, () => ({ deny: 'no' }))
+  on('tool.call', { tool: 'Edit' }, () => ({ result: 'boom', isError: true, text: 'boom' }) as never)
+}
+const contextsOf = async ($: Engine, count: number, agentId?: string) => {
+  const seen: Array<readonly string[] | undefined> = []
+  for (let i = 0; i < count; i += 1) seen.push(((await $.tool.call({ tool: 'Read', file_path: '/x', agentId } as never)) as { context?: readonly string[] }).context)
+
+  return seen
+}
+const remindedAt = (seen: Array<readonly string[] | undefined>) => seen.flatMap((c, i) => ((c ?? []).some(t => REMINDER.test(t)) ? [i + 1] : []))
+const progress = ($: Engine, statuses: Array<'pending' | 'in_progress' | 'completed'>) =>
+  $.tool.call({ tool: PROGRESS, tasks: statuses.map((status, i) => ({ subject: `t${i}`, status })) } as never)
+
+test('a stale list reminds the model at the 10th and 20th main-session call, keeping the result and its context', async ($, on) => {
+  remindSetup(on)
+  await progress($, ['in_progress', 'pending'])
+  const seen = await contextsOf($, 20)
+
+  expect(remindedAt(seen)).toEqual([10, 20])
+  expect(seen[0]).toEqual(['core note'])
+  expect(seen[9]?.[0]).toBe('core note')
+  expect(seen[9]?.[1]).toMatch(/for 10 tool calls/)
+  expect(seen[19]?.[1]).toMatch(/for 20 tool calls/)
+  const tenth = await (async () => {
+    await progress($, ['in_progress', 'pending'])
+    await contextsOf($, 9)
+
+    return $.tool.call({ tool: 'Read', file_path: '/x' } as never) as Promise<{ result?: unknown; ref?: number; context?: readonly string[] }>
+  })()
+  expect(tenth.result).toBe('ok')
+  expect(tenth.ref).toBe(7)
+  expect(tenth.context?.length).toBe(2)
+})
+
+test('a progress update resets the reminder count', async ($, on) => {
+  remindSetup(on)
+  await progress($, ['in_progress', 'pending'])
+  await contextsOf($, 6)
+  await progress($, ['completed', 'in_progress'])
+
+  expect(remindedAt(await contextsOf($, 12))).toEqual([10])
+})
+
+test('a subagent\'s calls never get the reminder and never count, a session without a list or without a task in progress gets none', async ($, on) => {
+  remindSetup(on)
+  expect(remindedAt(await contextsOf($, 12))).toEqual([])
+  await progress($, ['in_progress'])
+  expect(remindedAt(await contextsOf($, 25, SUBAGENT))).toEqual([])
+  expect(remindedAt(await contextsOf($, 10))).toEqual([10])
+  await progress($, ['completed', 'pending'])
+  expect(remindedAt(await contextsOf($, 12))).toEqual([])
+})
+
+test('a denied or failed call at the 10th is returned unchanged', async ($, on) => {
+  remindSetup(on)
+  await progress($, ['in_progress'])
+  await contextsOf($, 9)
+  const denied = (await $.tool.call({ tool: 'Bash', command: 'x' } as never)) as { deny?: string; context?: unknown }
+  expect(denied.deny).toBe('no')
+  expect(denied.context).toBeUndefined()
+
+  await progress($, ['in_progress'])
+  await contextsOf($, 9)
+  const failed = (await $.tool.call({ tool: 'Edit', file_path: '/x.ts', old_string: 'a', new_string: 'b' } as never)) as { isError?: boolean; text?: string; context?: unknown }
+  expect(failed.isError).toBe(true)
+  expect(failed.text).toBe('boom')
+  expect(failed.context).toBeUndefined()
+})
+
+test('a ledger without the header or naming another plan marks nothing and does not clear what was seen', async ($, on) => {
+  const { clock, disk } = await planSetup($, on)
+  disk.put(LEDGER('alpha'), 'Task 2: complete\n')
+  await readSddPlan($, disk, clock, 'alpha', SINGLE('Alpha'))
+  let ui = await openPlanView($)
+  expect(await textsOf(ui, /^① Alpha +▶ 1\/2/)).toBe(1)
+  await ui.unmount()
+
+  disk.put(LEDGER('alpha'), `${LEDGER_HEAD('alpha')}Task 2: complete\n`)
+  await clock.advance(5000)
+  disk.put(LEDGER('alpha'), `${LEDGER_HEAD('beta')}Task 1: complete\n`)
+  await clock.advance(5000)
+  ui = await mountPane($)
+  expect(await textsOf(ui, /^① Alpha +✔ 2\/2/)).toBe(1)
+  await ui.unmount()
+})
+
+test('two main-session calls at once at the 10th count: only the call that counted 10 carries the reminder', async ($, on) => {
+  remindSetup(on)
+  await progress($, ['in_progress'])
+  await contextsOf($, 8)
+  const call = () => $.tool.call({ tool: 'Read', file_path: '/x' } as never) as Promise<{ context?: readonly string[] }>
+  const both = await Promise.all([call(), call()])
+
+  expect(remindedAt(both.map(r => r.context))).toHaveLength(1)
+})

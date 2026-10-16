@@ -13,10 +13,11 @@ The scene is generated: `python3 tools/gen-world.py [--preview out.png]` rewrite
 
 ## Keeping the list current
 
-The model has to call `progress` itself, so the mod nudges it three ways:
+The model has to call `progress` itself, so the mod nudges it four ways:
 
 - A system-prompt section tells the model to send the full list before work of 2+ steps and to update it whenever a step starts or finishes.
 - After 10 tool calls of the main session without a list update, while a task is `in_progress`, the pane shows `⚠ no update for N tool calls`.
+- At the same moments (10, 20, 30… calls) the tool result also carries a short reminder only the model reads, asking it to call `progress` with the full list.
 - Calls made by subagents never change the pane list (they get an acknowledgement and nothing else).
 
 ## Other sessions
@@ -48,6 +49,31 @@ ctx ▰▰▰▰▰▱▱▱ 62%   5h ▰▰▱▱ 31%   7d ▰▱▱▱ 9%
 - **Toasts:** `ctx 82% · consider /compact` once per crossing of 80% (re-armed below 70%), and `5h limit 91% · resets in 40m` once per window at 90%. Option `isContextWarningOn` (default on) turns both off.
 
 A pane too short for the whole strip drops lines from the bottom and always keeps one task row.
+
+## Plan view
+
+For a run that follows a long Markdown plan, the pane can show the plan instead of the todo list. A `[ Plan ]` button appears under the progress bar once the session reads, edits or writes a `.md` file in a `plan` or `plans` directory, or after `/task-progress-plan <absolute path to a .md file>`. Every such file the main session touches is tracked (in order of first touch, at most 10, the one touched least recently dropped first) and becomes a phase of one merged plan: a plan with one phase shows as one phase named after it, a plan with several `##` phases adds them as `<plan title>: <phase>` (only when two or more plans have been read; one plan shows its phases as written); the header names the plan, or `N plans`. `/task-progress-plan <path>` replaces the list with that one file and pins it (touches add nothing until `/task-progress-plan off`, which clears the list). A completed `Task N` todo entry marks `Task N` only in the plan the session touched most recently, since numbers repeat across plans. Click it, or Tab to it and press Enter; hotkeys are not used.
+
+```
+Big plan   41/75  ▰▰▰▰▰▱▱▱
+① Base        ✔ 15/15
+② Gauges      ✔ 15/15
+③ Hook & git  ▶ 11/15 ▰▰▰▰▰▰▰▱
+④ Centre      ○  0/15
+⑤ Helper      ○  0/15
+③ Hook & git  [ ‹ ] [ › ]
+✔ 9 done
+✔ Task 10: Hook activity
+▶ Task 11: Doing line  0/3
+○ Task 12: Git
+… +3
+```
+
+- **How the file is read:** a `###` heading with checkboxes under it is a task (done when all its boxes are ticked); a `##` heading with tasks beneath it is a phase; a `---` line ends a `##` section, so tasks after it (as in the plans under `docs/superpowers/plans/`) form one phase named after the plan; boxes directly under a `##` heading are one-line tasks; code fences are ignored. Limits: 1,000,000 characters, 500 tasks, 12 phases; names are cut to 60 characters.
+- **Done also when** the session's todo list has a completed entry starting with `Task N` for the task `### Task N: …` (todo entries count for the plan touched most recently only), or when the plan's subagent-driven ledger reports it: for a plan at `<root>/docs/superpowers/plans/<name>.md`, the file `<root>/.superpowers/sdd/<name>/progress.md` with a line `Task N: complete …` (fix-round lines do not count). The ledger is read with the plan, every 5 seconds; tasks it reported stay done after it is removed. The system prompt also asks the model to tick the boxes of the plan it follows.
+- **Focus:** the pane opens the phase being worked on (the first with an unfinished task). `‹` and `›` move one phase and stop at the ends; a minute after the last press the focus returns by itself. Finished tasks before the current one collapse into `✔ N done`.
+- **Refresh:** every tracked file is read every 5 seconds and when the session touches it. A file that cannot be read keeps its last plan.
+- **Toast:** `Phase ③ Hook & git done (15/15)`, once per phase; phases already complete when a plan is first read are not announced.
 
 ## Completion sound
 
