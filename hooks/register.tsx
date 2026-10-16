@@ -1,20 +1,15 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { Item, TaskStatus } from '../types'
-import {
-  FRAME_MS,
-  MAX_COLUMNS,
-  MIN_COLUMNS,
-  STAGE_ROWS,
-  frameKey,
-  isAllDone,
-  modeOf,
-  stageCells,
-} from './stage'
-import { timingText } from './progress'
+import type { Item, SessionRow, TaskStatus } from '../types'
+import { sceneCells } from './compositor'
+import { DEFAULT_BODY_ROWS, MAX_SCENE_COLUMNS, litWindows, sceneLayout } from './layout'
+import { describeRow, layoutRow, newlyWaiting, parseTell, resolveTarget, visibleRows } from './overview'
+import { isAllDone, timingText } from './progress'
 import { playerCommands, soundPath, wasCutByCap } from './sound'
 import { COLORS, barParts, truncate } from './style'
+import { hasSessionIdChanged, pollSessions, publishProgress, removeRecord, resetSyncState } from './sync'
+import { WINDOWS } from './world'
 
 const PANE = 'task-progress'
 const PROGRESS_TOOL = 'mcp__task-progress__progress'
@@ -24,21 +19,29 @@ const DEFAULT_COLUMNS = 24
 const DEFAULT_SOUND_SECONDS = 12
 const MIN_SOUND_SECONDS = 1
 const MAX_SOUND_SECONDS = 120
+/** Tool calls without a list update after which the pane warns that it may be stale. */
+const STALE_CALLS = 10
+/** How often the other sessions are read. */
+const POLL_MS = 3000
+const TELL_USAGE = 'Usage: /task-progress-tell <session name> <message>'
+/** The tools that update the list: they reset the stale counter instead of counting. */
+const LIST_TOOLS: readonly string[] = [PROGRESS_TOOL, 'TodoWrite', 'TaskCreate', 'TaskUpdate', 'TaskList']
+const USAGE_PROMPT = `The user watches a live task-progress pane fed by the ${PROGRESS_TOOL} tool. For any work of 2 or more steps, call it first with the full ordered list, then call it again every time a step starts (in_progress) or finishes (completed) and whenever the plan changes, also in the middle of long runs of tool calls. Keep exactly one task in_progress. Keep every task as its own entry for the whole job: never merge finished tasks into one line and never rename them; a finished task stays in the list as completed, and each call changes statuses only, adding tasks at the end or in place. Never leave the list stale: when the work is done, mark every task completed.`
 
-let isBusy = false
 let isSoundOn = true
+let isWaitSoundOn = false
+/** Status of each other session at the last poll; undefined until the first one, which raises no alert. */
+let previousStatus: Map<string, string> | undefined
 let customSound = ''
 let soundMs = DEFAULT_SOUND_SECONDS * 1000
 let hasChimed = false
-let isDone = false
-let tick = 0
-let lastKey = ''
-let columns = DEFAULT_COLUMNS
 
 const todos = atom({ plugin: 'task-progress', key: 'todos' } as const, [] as Item[])
 const startedAt = atom({ plugin: 'task-progress', key: 'startedAt' } as const, 0)
 const finishedAt = atom({ plugin: 'task-progress', key: 'finishedAt' } as const, 0)
 const tasks = atom({ plugin: 'task-progress', key: 'tasks' } as const, [] as Item[])
+const idleCalls = atom({ plugin: 'task-progress', key: 'idleCalls' } as const, 0)
+const sessions = atom({ plugin: 'task-progress', key: 'sessions' } as const, [] as SessionRow[])
 
 const summarize = (items: Item[]) => {
   const done = items.filter(i => i.status === 'completed').length
@@ -84,15 +87,41 @@ async function playDone($: EngineInterface, file: string, maxMs: number): Promis
   }
 }
 
+let isPolling = false
+
+/** One read of the other sessions; a failed read keeps the rows already shown, a poll still running is not doubled. */
+async function refreshSessions($: EngineInterface): Promise<void> {
+  if (isPolling) return
+  isPolling = true
+  try {
+    if (await hasSessionIdChanged($)) await publishProgress($, [...(await read($, todos)), ...(await read($, tasks))])
+    const rows = await pollSessions($)
+    if (rows === undefined) return
+    const fresh = newlyWaiting(previousStatus, rows)
+    previousStatus = new Map(rows.map(r => [r.sessionId, r.status]))
+    await update($, sessions, () => rows)
+    if (fresh.length === 0) return
+    try {
+      $.ui.toast(`◆ ${fresh.map(r => r.name).join(', ')} waiting for you`)
+    } catch {
+      // a toast is a side effect: it must never throw into the session
+    }
+    if (isWaitSoundOn) void playDone($, soundPath($.plugin.root, customSound), soundMs)
+  } finally {
+    isPolling = false
+  }
+}
+
 async function refreshStatus($: EngineInterface) {
   const list = [...(await read($, todos)), ...(await read($, tasks))]
   const { done, total, percent } = summarize(list)
-  isDone = isAllDone(list)
+  const isDone = isAllDone(list)
   if (!isDone) hasChimed = false
   if (isDone && !hasChimed) {
     hasChimed = true
     if (isSoundOn) void playDone($, soundPath($.plugin.root, customSound), soundMs)
   }
+  await update($, idleCalls, () => 0)
   const now = await $.clock.now()
   if (total === 0) {
     await update($, startedAt, () => 0)
@@ -102,10 +131,15 @@ async function refreshStatus($: EngineInterface) {
     await update($, finishedAt, prev => (done === total ? prev || now : 0))
   }
   $.ui.status(total === 0 ? undefined : `tasks ${done}/${total} · ${percent}%`)
+  await publishProgress($, list)
 }
 
 export const register: Register = (on, options) => {
   isSoundOn = options.isSoundOn !== false
+  isWaitSoundOn = options.isWaitSoundOn === true
+  previousStatus = undefined
+  isPolling = false
+  resetSyncState()
   customSound = typeof options.soundFile === 'string' ? options.soundFile : ''
   const seconds = typeof options.maxSeconds === 'number' ? options.maxSeconds : DEFAULT_SOUND_SECONDS
   soundMs = Math.min(MAX_SOUND_SECONDS, Math.max(MIN_SOUND_SECONDS, seconds)) * 1000
@@ -139,31 +173,21 @@ export const register: Register = (on, options) => {
       },
       isDeferred: false,
     })
-    $.clock.every(FRAME_MS, () => {
-      tick += 1
-      const mode = modeOf(isBusy, isDone)
-      const key = frameKey(mode, tick, columns)
-      if (key === lastKey) return
-      lastKey = key
-      void $.ui.blit({
-        requestId: PANE,
-        key: 'stage',
-        columns,
-        cells: stageCells(mode, tick, columns),
-      })
+    await $.command.register({
+      name: 'task-progress-tell',
+      description: 'Send a message to another session: /task-progress-tell <session name> <message>',
+    })
+    await publishProgress($, [...(await read($, todos)), ...(await read($, tasks))])
+    await refreshSessions($)
+    $.clock.every(POLL_MS, () => {
+      void refreshSessions($)
     })
 
     return next(e)
   })
 
-  on('turn.start', ($, e, next) => {
-    if (e.agentId === undefined) isBusy = true
-
-    return next(e)
-  }).catch((_$, e, next) => next(e))
-
-  on('turn.complete', ($, e, next) => {
-    if (e.agentId === undefined) isBusy = false
+  on('session.end', async ($, e, next) => {
+    await removeRecord($, e.sessionId)
 
     return next(e)
   }).catch((_$, e, next) => next(e))
@@ -174,7 +198,34 @@ export const register: Register = (on, options) => {
     return { text: 'Task progress pane opened.' }
   })
 
+  on('prompt.compose', async ($, e, next) => {
+    const composed = await next(e)
+
+    return { sections: [...composed.sections, { id: 'task-progress:usage', text: USAGE_PROMPT, scope: 'session' as const }] }
+  }).catch((_$, e, next) => next(e))
+
+  on('tool.call', ($, e, next) => {
+    const isCounted = e.agentId === undefined && !LIST_TOOLS.includes(e.tool)
+
+    return isCounted ? update($, idleCalls, n => n + 1).then(() => next(e)) : next(e)
+  }).catch((_$, e, next) => next(e))
+
+  on('command.run', { command: 'task-progress-tell' }, async ($, e) => {
+    const tell = parseTell(e.args)
+    if (tell === undefined) return { text: TELL_USAGE }
+    const target = resolveTarget(await read($, sessions), tell.query)
+    if ('error' in target) return { text: target.error }
+    try {
+      const sent = await $.session.send({ to: { sessionId: target.row.sessionId }, text: tell.text })
+
+      return { text: sent.isDelivered ? `Sent to ${target.row.name}.` : `Not delivered to ${target.row.name}: ${sent.reason}` }
+    } catch (error) {
+      return { text: `Not delivered to ${target.row.name}: ${String(error)}` }
+    }
+  }).catch((_$, e, next) => next(e))
+
   on('tool.call', { tool: PROGRESS_TOOL }, async ($, e) => {
+    if (e.agentId !== undefined) return { result: 'Noted. The pane shows the main session list only.' }
     const items = parseProgressInput(e.tasks)
     if (items === undefined) {
       return { deny: 'tasks must be an array of { subject, status: pending | in_progress | completed }' }
@@ -187,6 +238,7 @@ export const register: Register = (on, options) => {
   }).catch((_$, e, next) => next(e))
 
   on('tool.call', { tool: 'TodoWrite' }, async ($, e, next) => {
+    if (e.agentId !== undefined) return next(e)
     const ran = await next(e)
     if (isOk(ran)) {
       const items: Item[] = e.todos.map((t, i) => ({
@@ -202,6 +254,7 @@ export const register: Register = (on, options) => {
   }).catch((_$, e, next) => next(e))
 
   on('tool.call', { tool: 'TaskCreate' }, async ($, e, next) => {
+    if (e.agentId !== undefined) return next(e)
     const ran = await next(e)
     if (isOk(ran) && ran.result) {
       const id = (ran.result as { task: { id: string } }).task.id
@@ -216,6 +269,7 @@ export const register: Register = (on, options) => {
   }).catch((_$, e, next) => next(e))
 
   on('tool.call', { tool: 'TaskUpdate' }, async ($, e, next) => {
+    if (e.agentId !== undefined) return next(e)
     const ran = await next(e)
     if (isOk(ran)) {
       const newStatus: TaskStatus | undefined = e.status === 'deleted' ? undefined : e.status
@@ -235,6 +289,7 @@ export const register: Register = (on, options) => {
   }).catch((_$, e, next) => next(e))
 
   on('tool.call', { tool: 'TaskList' }, async ($, e, next) => {
+    if (e.agentId !== undefined) return next(e)
     const ran = await next(e)
     if (isOk(ran) && ran.result) {
       const list = (ran.result as { tasks: Array<{ id: string; subject: string; status: TaskStatus }> }).tasks
@@ -260,20 +315,45 @@ export const register: Register = (on, options) => {
     const finished = await read($, finishedAt)
     const elapsed = started === 0 ? 0 : (finished || now) - started
     const timing = timingText(elapsed, done, total, finished !== 0)
+    const idle = await read($, idleCalls)
+    const isStale = idle >= STALE_CALLS && items.some(i => i.status === 'in_progress')
+    const { shown, more } = visibleRows(await read($, sessions))
+    const blockRows = shown.length + (more > 0 ? 1 : 0)
 
-    const inner = Math.min(
-      MAX_COLUMNS,
-      Math.max(MIN_COLUMNS, (e.props.bodyColumns ?? DEFAULT_COLUMNS + 2 * CARD_PADDING) - 2 * CARD_PADDING),
+    const available = Math.max(1, (e.props.bodyColumns ?? DEFAULT_COLUMNS + 2 * CARD_PADDING) - 2 * CARD_PADDING)
+    const inner = Math.min(MAX_SCENE_COLUMNS, available)
+    const bodyRows = e.props.scroll?.bodyRows ?? e.viewport?.rows ?? DEFAULT_BODY_ROWS
+    const Raster = e.surface === 'terminal' && 'Raster' in ui ? ui.Raster : undefined
+    const layout = Raster === undefined ? undefined : sceneLayout(available, bodyRows)
+    const scene =
+      Raster === undefined || layout === undefined ? null : (
+        <Raster
+          key="scene"
+          columns={layout.columns}
+          rows={layout.rows}
+          cells={sceneCells(layout.columns, layout.firstRow, layout.rows, litWindows(done, total, WINDOWS.length))}
+        />
+      )
+
+    const sessionBlock = (
+      <Box flexDirection="column">
+        {shown.map(row => {
+          const text = layoutRow(describeRow(row, now), inner)
+          const tone = row.state === 'waiting' ? COLORS.accent : row.state === 'busy' ? COLORS.text : COLORS.muted
+
+          return (
+            <Text>
+              <Text color={tone}>{text.head}</Text>
+              <Text color={COLORS.muted}>{text.progress}</Text>
+              <Text color={row.state === 'waiting' ? COLORS.accent : COLORS.muted}> {text.detail}</Text>
+            </Text>
+          )
+        })}
+        {more > 0 && <Text color={COLORS.muted}>+{more} more</Text>}
+      </Box>
     )
-    columns = inner
-    isDone = isAllDone(items)
-    const mode = modeOf(isBusy, isDone)
-    const hasStage = e.surface === 'terminal' && 'Raster' in ui && (e.viewport?.rows ?? 99) >= STAGE_ROWS + 8
-    const stage = hasStage ? (
-      <ui.Raster key="stage" columns={inner} rows={STAGE_ROWS} cells={stageCells(mode, tick, inner)} />
-    ) : null
 
-    const room = Math.max(1, (e.viewport?.rows ?? 24) - 7 - (hasStage ? STAGE_ROWS : 0))
+    const room = Math.max(1, bodyRows - 7 - (layout?.rows ?? 0) - blockRows)
     const shownItems = [
       ...items.filter(i => i.status === 'in_progress'),
       ...items.filter(i => i.status !== 'in_progress'),
@@ -290,13 +370,16 @@ export const register: Register = (on, options) => {
         backgroundColor={COLORS.card}
         height={height}
       >
-        {stage}
+        {scene}
         <Text>
           <Text color={accent}>{filled}</Text>
           <Text color={COLORS.track}>{rest}</Text>
         </Text>
         {total === 0 ? (
-          <Text color={COLORS.muted}>No tasks yet. They appear when Claude plans work.</Text>
+          <Box flexDirection="column">
+            <Text color={COLORS.muted}>No tasks yet. They appear when Claude plans work.</Text>
+            {sessionBlock}
+          </Box>
         ) : (
           <Box flexDirection="column">
             <Text>
@@ -309,6 +392,8 @@ export const register: Register = (on, options) => {
               </Text>
             </Text>
             {timing !== '' && <Text color={COLORS.muted}>{timing}</Text>}
+            {isStale && <Text color={COLORS.warn}>⚠ no update for {idle} tool calls</Text>}
+            {sessionBlock}
             <Text> </Text>
             {shownItems.map(i => (
               <Text>

@@ -7,6 +7,7 @@ export const COLORS = {
   accent: '#79c0ff',
   success: '#7ee787',
   active: '#f2cc60',
+  warn: '#ff7b72',
   doneText: '#6e7681',
 } as const
 

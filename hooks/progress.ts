@@ -27,3 +27,8 @@ export function timingText(elapsedMs: number, done: number, total: number, isFin
     ? formatDuration(elapsedMs)
     : `${formatDuration(elapsedMs)} · ~${formatDuration(left)} left`
 }
+
+/** True when the list has tasks and every one is completed. */
+export function isAllDone(items: ReadonlyArray<{ status: string }>): boolean {
+  return items.length > 0 && items.every(i => i.status === 'completed')
+}

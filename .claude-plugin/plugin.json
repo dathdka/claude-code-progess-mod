@@ -1,7 +1,7 @@
 {
   "name": "task-progress",
-  "version": "0.5.1",
-  "description": "Pane tracking the session's todo/task list with a progress bar and percent done",
+  "version": "0.7.0",
+  "description": "Pane tracking the session's todo/task list with a progress bar, percent done and a citadel scene whose windows light as tasks finish",
   "types": "./types/index.d.ts",
   "userConfig": {
     "isSoundOn": {
@@ -21,6 +21,12 @@
       "title": "Max sound length (seconds)",
       "description": "A longer clip is cut after this many seconds (1-120).",
       "default": 12
+    },
+    "isWaitSoundOn": {
+      "type": "boolean",
+      "title": "Play a sound when another session starts waiting for you",
+      "description": "Plays the same jingle once each time another session goes from busy to idle.",
+      "default": false
     }
   }
 }

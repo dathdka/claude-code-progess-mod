@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { formatDuration, remainingMs, timingText } from './progress'
+import { formatDuration, isAllDone, remainingMs, timingText } from './progress'
 
 const MIN = 60_000
 
@@ -22,4 +22,10 @@ test('timing text for running, finished and empty lists', () => {
   expect(timingText(5 * MIN, 0, 3, false)).toBe('5m')
   expect(timingText(12 * MIN, 3, 7, false)).toBe('12m · ~16m left')
   expect(timingText(20 * MIN, 3, 3, true)).toBe('20m total')
+})
+
+test('all done needs at least one task and every task completed', () => {
+  expect(isAllDone([])).toBe(false)
+  expect(isAllDone([{ status: 'completed' }, { status: 'pending' }])).toBe(false)
+  expect(isAllDone([{ status: 'completed' }, { status: 'completed' }])).toBe(true)
 })
