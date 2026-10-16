@@ -79,7 +79,7 @@ Inputs and conditions the spec implies but does not spell out; each has a test i
 - Consumes: nothing.
 - Produces (`hooks/world.ts`): `WORLD_W = 96`, `WORLD_H = 32`, `ALPHABET: string`, `PALETTE: readonly number[]` (0xRRGGBB), `WINDOW_ON: number` (palette index of a lit window), `WINDOWS: readonly (readonly [number, number, number, number])[]` (`[x0, y0, x1, y1)` pixel rectangles, 16 of them), `BG: readonly (readonly string[])[]` (8 phases x 32 rows x 96 characters, each character's position in `ALPHABET` is a palette index).
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `hooks/world.test.ts`:
 
@@ -114,12 +114,12 @@ test('16 windows sit inside the world and a lit window has a palette colour', ()
 })
 ```
 
-- [ ] **Step 2: Run it and see it fail**
+- [x] **Step 2: Run it and see it fail**
 
 Run: `claude plugin test .`
 Expected: `hooks/world.test.ts: cannot import "./world"` reported as a failed file; the other 23 tests pass.
 
-- [ ] **Step 3: Create the generator**
+- [x] **Step 3: Create the generator**
 
 Create `tools/gen-world.py`:
 
@@ -326,12 +326,12 @@ for g in q:
 print('palette', len(palette), 'background pairs', len(pairs))
 ```
 
-- [ ] **Step 4: Generate the world and look at it**
+- [x] **Step 4: Generate the world and look at it**
 
 Run: `python3 tools/gen-world.py --preview /tmp/citadel-preview.png`
 Expected output: `palette 32 background pairs 179`, a new `hooks/world.ts` of about 28 KB, and a 960x320 PNG. Open the PNG (Read tool on the path): a golden-sunset sky, a large glowing Erdtree across the top and right, a dark blue-slate citadel with needle towers in the centre, an ochre path along the bottom, and small dark window slits in the stone (none lit).
 
-- [ ] **Step 5: Run the tests and see them pass**
+- [x] **Step 5: Run the tests and see them pass**
 
 Run: `claude plugin test .`
 Expected: `hooks/world.test.ts` shows 2 passes; 25 pass, 0 fail in total.
@@ -348,7 +348,7 @@ Expected: `hooks/world.test.ts` shows 2 passes; 25 pass, 0 fail in total.
 - Consumes: nothing.
 - Produces: `MAX_SCENE_COLUMNS = 96`, `MIN_SCENE_COLUMNS = 16`, `MAX_SCENE_ROWS = 16`, `MIN_SCENE_ROWS = 8`, `INFO_ROWS = 15`, `DEFAULT_BODY_ROWS = 40`; `type SceneLayout = { columns: number; rows: number; firstRow: number }`; `sceneLayout(innerColumns: number, bodyRows: number): SceneLayout | undefined`; `litWindows(done: number, total: number, windows: number): number`.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `hooks/layout.test.ts`:
 
@@ -405,12 +405,12 @@ test('lit windows never go down as tasks finish', () => {
 })
 ```
 
-- [ ] **Step 2: Run it and see it fail**
+- [x] **Step 2: Run it and see it fail**
 
 Run: `claude plugin test .`
 Expected: `hooks/layout.test.ts: cannot import "./layout"` as a failed file.
 
-- [ ] **Step 3: Write the implementation**
+- [x] **Step 3: Write the implementation**
 
 Create `hooks/layout.ts`:
 
@@ -446,7 +446,7 @@ export function litWindows(done: number, total: number, windows: number): number
 }
 ```
 
-- [ ] **Step 4: Run the tests and see them pass**
+- [x] **Step 4: Run the tests and see them pass**
 
 Run: `claude plugin test .`
 Expected: `hooks/layout.test.ts` shows 6 passes; 0 fail in total.
@@ -463,7 +463,7 @@ Expected: `hooks/layout.test.ts` shows 6 passes; 0 fail in total.
 - Consumes: `world.ts` (`ALPHABET`, `BG`, `PALETTE`, `WINDOWS`, `WINDOW_ON`, `WORLD_H`, `WORLD_W`), and in the test `MAX_SCENE_COLUMNS`, `MAX_SCENE_ROWS` from `layout.ts`.
 - Produces: `sceneCells(columns: number, firstRow: number, rows: number, lit: number, phase = 0): string`. Standard padded base64 of `columns * rows` little-endian u32 triplets `[code point, foreground, background]`, the form a Raster's `cells` prop takes. `columns` is cut from the centre of the 96-wide world; cell rows `firstRow` up to `firstRow + rows` are drawn; the first `lit` entries of `WINDOWS` are painted `WINDOW_ON`.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `hooks/compositor.test.ts`:
 
@@ -565,12 +565,12 @@ test('a render stays within the time budget', () => {
 })
 ```
 
-- [ ] **Step 2: Run it and see it fail**
+- [x] **Step 2: Run it and see it fail**
 
 Run: `claude plugin test .`
 Expected: `hooks/compositor.test.ts: cannot import "./compositor"` as a failed file.
 
-- [ ] **Step 3: Write the implementation**
+- [x] **Step 3: Write the implementation**
 
 Create `hooks/compositor.ts`:
 
@@ -636,7 +636,7 @@ export function sceneCells(columns: number, firstRow: number, rows: number, lit:
 }
 ```
 
-- [ ] **Step 4: Run the tests and see them pass**
+- [x] **Step 4: Run the tests and see them pass**
 
 Run: `claude plugin test .`
 Expected: `hooks/compositor.test.ts` shows 7 passes; 0 fail in total. (Measured while writing this plan: 185 colour pairs, about 0.4 ms per render.)
@@ -655,7 +655,7 @@ Expected: `hooks/compositor.test.ts` shows 7 passes; 0 fail in total. (Measured 
 - Consumes: `sceneCells(columns, firstRow, rows, lit, phase?)` from `compositor.ts`; `sceneLayout`, `litWindows`, `DEFAULT_BODY_ROWS`, `MAX_SCENE_COLUMNS` from `layout.ts`; `WINDOWS` from `world.ts`.
 - Produces: `isAllDone(items: ReadonlyArray<{ status: string }>): boolean` in `progress.ts`. The pane draws a `Raster` with key `scene` when a scene fits.
 
-- [ ] **Step 1: Move `isAllDone` to `progress.ts` with its test**
+- [x] **Step 1: Move `isAllDone` to `progress.ts` with its test**
 
 Append to `hooks/progress.ts`:
 
@@ -676,7 +676,7 @@ test('all done needs at least one task and every task completed', () => {
 })
 ```
 
-- [ ] **Step 2: Replace the singing-stage test in `hooks/register.test.ts`**
+- [x] **Step 2: Replace the singing-stage test in `hooks/register.test.ts`**
 
 Change the line `import { stageCells } from './stage'` to:
 
@@ -799,12 +799,12 @@ test('a pane too small for the scene shows the text layout alone', async ($, on)
 })
 ```
 
-- [ ] **Step 3: Run the tests and see the new ones fail**
+- [x] **Step 3: Run the tests and see the new ones fail**
 
 Run: `claude plugin test .`
 Expected: the four new register tests fail (the pane still draws the singer stage); everything else passes.
 
-- [ ] **Step 4: Edit `hooks/register.tsx`**
+- [x] **Step 4: Edit `hooks/register.tsx`**
 
 Apply this diff (it removes the stage import and state, the frame timer, the two turn hooks and the old stage drawing, and draws the scene):
 
@@ -940,11 +940,11 @@ Apply this diff (it removes the stage import and state, the frame timer, the two
            <Text color={COLORS.track}>{rest}</Text>
 ```
 
-- [ ] **Step 5: Delete the singer**
+- [x] **Step 5: Delete the singer**
 
 Run: `rm hooks/stage.ts hooks/stage.test.ts hooks/singer.ts`
 
-- [ ] **Step 6: Run tests, type-check and validate**
+- [x] **Step 6: Run tests, type-check and validate**
 
 Run: `claude plugin test .`
 Expected: 37 pass, 0 fail across 7 files.
@@ -955,7 +955,7 @@ Expected: no output.
 Run: `claude plugin validate .`
 Expected: `Validation passed with warnings` (warnings only, no errors).
 
-- [ ] **Step 7: Update the README and the version**
+- [x] **Step 7: Update the README and the version**
 
 In `README.md`, replace the paragraph starting `The pane shows done/total, percent, elapsed time and an ETA, plus a pixel-art singer portrait` with:
 
@@ -973,20 +973,20 @@ In `.claude-plugin/plugin.json`, set `"version": "0.6.0"` and `"description": "P
 
 **Files:** none.
 
-- [ ] **Step 1: Full verification**
+- [x] **Step 1: Full verification**
 
 Run, from the repo: `claude plugin test .`, `tsc -p /tmp/task-progress-tsconfig.json`, `claude plugin validate .`
 Expected: 37 pass 0 fail; no tsc output; validation passed with warnings.
 
-- [ ] **Step 2: Regenerate and confirm the generated file is current**
+- [x] **Step 2: Regenerate and confirm the generated file is current**
 
 Run: `cp hooks/world.ts /tmp/world.ts.before && python3 tools/gen-world.py && cmp hooks/world.ts /tmp/world.ts.before && echo SAME`
 Expected: `SAME` (the generator is deterministic).
 
-- [ ] **Step 3: Look at it in the real pane**
+- [x] **Step 3: Look at it in the real pane**
 
 Run `claude --plugin-dir ~/claude-mods/task-progress` in a terminal at least 96 + 4 columns wide and 31 rows tall, open `/task-progress`, and ask Claude to make a 4-step task list and finish the steps one by one. Expected: the scene shows above the progress bar; windows light 4, 8, 12, 16 as steps complete; a narrower pane crops the scene around the centre.
 
-- [ ] **Step 4: User sign-off**
+- [x] **Step 4: User sign-off**
 
 Show the user the preview PNG and the pane. Success criterion 3 of the spec (the user approves the look) needs their word. Leave everything uncommitted until they ask for a commit.

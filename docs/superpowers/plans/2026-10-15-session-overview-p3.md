@@ -59,7 +59,7 @@ Inputs and conditions the spec implies but no task text spells out; each has a t
 - Consumes: `Item` from `types/index.d.ts`, `truncate` from `hooks/style.ts`.
 - Produces: `RECORD_VERSION = 1`, `CURRENT_MAX = 60`; `type ProgressRecord = { v: 1; sessionId: string; done: number; total: number; current: string; updatedAt: number }`; `type RegistryEntry = { sessionId: string; pid: number; name: string; kind: string; status: string; statusSince: number; startedAt: number }`; `progressRecord(sessionId: string, items: ReadonlyArray<Item>, now: number): ProgressRecord`; `parseRecord(raw: string): ProgressRecord | undefined`; `parseRegistry(raw: string): RegistryEntry | undefined`.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `hooks/share.test.ts`:
 
@@ -149,12 +149,12 @@ test('parseRegistry refuses junk and entries without an id or a pid', () => {
 })
 ```
 
-- [ ] **Step 2: Run it and see it fail**
+- [x] **Step 2: Run it and see it fail**
 
 Run: `claude plugin test .`
 Expected: `hooks/share.test.ts: cannot import "./share"` as a failed file; the other 40 tests pass.
 
-- [ ] **Step 3: Write the implementation**
+- [x] **Step 3: Write the implementation**
 
 Create `hooks/share.ts`:
 
@@ -239,7 +239,7 @@ export function parseRegistry(raw: string): RegistryEntry | undefined {
 }
 ```
 
-- [ ] **Step 4: Run the tests and see them pass**
+- [x] **Step 4: Run the tests and see them pass**
 
 Run: `claude plugin test .` → 46 pass, 0 fail. Run `tsc -p /tmp/task-progress-tsconfig.json` → no output.
 
@@ -256,7 +256,7 @@ Run: `claude plugin test .` → 46 pass, 0 fail. Run `tsc -p /tmp/task-progress-
 - Consumes: `ProgressRecord`, `RegistryEntry` from `share.ts`; `formatDuration` from `progress.ts`; `truncate` from `style.ts`.
 - Produces: `MAX_ROWS = 5`; `type RowText = { mark: string; name: string; progress: string; detail: string }`; `buildRows(selfId: string, entries: readonly RegistryEntry[], records: readonly ProgressRecord[]): SessionRow[]`; `visibleRows(rows: readonly SessionRow[]): { shown: SessionRow[]; more: number }`; `describeRow(row: SessionRow, now: number): RowText`; `layoutRow(text: RowText, width: number): { head: string; progress: string; detail: string }`; `newlyWaiting(before: ReadonlyMap<string, string> | undefined, rows: readonly SessionRow[]): SessionRow[]`. Types `SessionRow`, `SessionState` come from `types/index.d.ts`.
 
-- [ ] **Step 1: Add the types**
+- [x] **Step 1: Add the types**
 
 Apply this diff to `types/index.d.ts` (two new types and the `sessions` state key):
 
@@ -291,7 +291,7 @@ Apply this diff to `types/index.d.ts` (two new types and the `sessions` state ke
  }
 ```
 
-- [ ] **Step 2: Write the failing test**
+- [x] **Step 2: Write the failing test**
 
 Create `hooks/overview.test.ts`:
 
@@ -437,12 +437,12 @@ test('a row is laid out in aligned columns and the detail is cut to the width', 
 })
 ```
 
-- [ ] **Step 3: Run it and see it fail**
+- [x] **Step 3: Run it and see it fail**
 
 Run: `claude plugin test .`
 Expected: `hooks/overview.test.ts: cannot import "./overview"` as a failed file.
 
-- [ ] **Step 4: Write the implementation**
+- [x] **Step 4: Write the implementation**
 
 Create `hooks/overview.ts`:
 
@@ -551,7 +551,7 @@ export function layoutRow(text: RowText, width: number): { head: string; progres
 }
 ```
 
-- [ ] **Step 5: Run the tests and see them pass**
+- [x] **Step 5: Run the tests and see them pass**
 
 Run: `claude plugin test .` → 59 pass, 0 fail. Run `tsc -p /tmp/task-progress-tsconfig.json` → no output.
 
@@ -567,7 +567,7 @@ Run: `claude plugin test .` → 59 pass, 0 fail. Run `tsc -p /tmp/task-progress-
 - Consumes: `progressRecord` from `share.ts`; `SessionEndInput.sessionId`.
 - Produces (`sync.ts`): `configDir($: EngineInterface): Promise<string>`; `publishProgress($: EngineInterface, items: ReadonlyArray<Item>): Promise<void>`; `removeRecord($: EngineInterface, sessionId: string): Promise<void>`. Both writers swallow errors and log once to the debug channel.
 
-- [ ] **Step 1: Add the mock disk and the failing tests**
+- [x] **Step 1: Add the mock disk and the failing tests**
 
 In `hooks/register.test.ts`, add this line at the very top (above the existing first import):
 
@@ -706,12 +706,12 @@ test('the session end removes the record of the session that ended', async ($, o
 })
 ```
 
-- [ ] **Step 2: Run the tests and see them fail**
+- [x] **Step 2: Run the tests and see them fail**
 
 Run: `claude plugin test .`
 Expected: four of the five new tests fail (nothing writes a record; `session.end` is not hooked); "a failing disk never breaks the tool result" already passes.
 
-- [ ] **Step 3: Create `hooks/sync.ts`**
+- [x] **Step 3: Create `hooks/sync.ts`**
 
 ```ts
 import type { EngineInterface } from 'claude-code'
@@ -766,7 +766,7 @@ export async function removeRecord($: EngineInterface, sessionId: string): Promi
 }
 ```
 
-- [ ] **Step 4: Wire it into `hooks/register.tsx`**
+- [x] **Step 4: Wire it into `hooks/register.tsx`**
 
 Apply this diff (it publishes after every list change and at session start, and removes the ended session's record):
 
@@ -807,7 +807,7 @@ Apply this diff (it publishes after every list change and at session start, and 
  
 ```
 
-- [ ] **Step 5: Run tests, type-check and validate**
+- [x] **Step 5: Run tests, type-check and validate**
 
 Run: `claude plugin test .` → 64 pass, 0 fail. Run `tsc -p /tmp/task-progress-tsconfig.json` → no output. Run `claude plugin validate .` → `Validation passed with warnings`.
 
@@ -822,7 +822,7 @@ Run: `claude plugin test .` → 64 pass, 0 fail. Run `tsc -p /tmp/task-progress-
 - Consumes: `buildRows`, `visibleRows`, `describeRow`, `layoutRow` from `overview.ts`; `parseRecord`, `parseRegistry` from `share.ts`.
 - Produces: `pollSessions($: EngineInterface): Promise<SessionRow[] | undefined>` (undefined when the poll failed: the pane keeps its last rows). The pane draws, in both the empty and the non-empty branch, up to 5 rows of `<mark> <name 14> <progress 12> <detail>` and `+N more`; the task list's room shrinks by the rows the block takes.
 
-- [ ] **Step 1: Add the failing tests**
+- [x] **Step 1: Add the failing tests**
 
 In `hooks/register.test.ts`, insert this block immediately above the comment `/** The jingle starts unawaited ...` (below the Task 3 block):
 
@@ -950,12 +950,12 @@ test('only 12 sessions are read and 5 shown, the rest are counted', async ($, on
 })
 ```
 
-- [ ] **Step 2: Run the tests and see them fail**
+- [x] **Step 2: Run the tests and see them fail**
 
 Run: `claude plugin test .`
 Expected: five of the new tests fail (no rows are drawn, nothing is pruned); "junk files and a broken disk leave the pane working" already passes.
 
-- [ ] **Step 3: Extend `hooks/sync.ts`**
+- [x] **Step 3: Extend `hooks/sync.ts`**
 
 Apply this diff (imports, constants and `pollSessions`):
 
@@ -1044,7 +1044,7 @@ Apply this diff (imports, constants and `pollSessions`):
 +}
 ```
 
-- [ ] **Step 4: Extend `hooks/register.tsx`**
+- [x] **Step 4: Extend `hooks/register.tsx`**
 
 Apply this diff (the `sessions` atom, `refreshSessions`, the 3 s poll, and the block in the pane):
 
@@ -1166,7 +1166,7 @@ Apply this diff (the `sessions` atom, `refreshSessions`, the 3 s poll, and the b
                <Text>
 ```
 
-- [ ] **Step 5: Run tests, type-check and validate**
+- [x] **Step 5: Run tests, type-check and validate**
 
 Run: `claude plugin test .` → 70 pass, 0 fail. Run `tsc -p /tmp/task-progress-tsconfig.json` → no output. Run `claude plugin validate .` → `Validation passed with warnings`.
 
@@ -1181,7 +1181,7 @@ Run: `claude plugin test .` → 70 pass, 0 fail. Run `tsc -p /tmp/task-progress-
 - Consumes: `newlyWaiting` from `overview.ts`; the existing `playDone`, `soundPath`, `soundMs`, `customSound` in `register.tsx`.
 - Produces: option `isWaitSoundOn` (boolean, default false); a toast `◆ <names> waiting for you` when sessions go from `busy` to `idle`; none at the first poll.
 
-- [ ] **Step 1: Add the failing tests**
+- [x] **Step 1: Add the failing tests**
 
 In `hooks/register.test.ts`, insert this block immediately above the comment `/** The jingle starts unawaited ...` (below the Task 4 block):
 
@@ -1253,12 +1253,12 @@ test('a toast that fails never breaks the poll', async ($, on) => {
 })
 ```
 
-- [ ] **Step 2: Run the tests and see them fail**
+- [x] **Step 2: Run the tests and see them fail**
 
 Run: `claude plugin test .`
 Expected: the toast test and the jingle test fail; "a toast that fails never breaks the poll" already passes.
 
-- [ ] **Step 3: Edit `hooks/register.tsx` and `.claude-plugin/plugin.json`**
+- [x] **Step 3: Edit `hooks/register.tsx` and `.claude-plugin/plugin.json`**
 
 Apply this diff to `hooks/register.tsx`:
 
@@ -1327,7 +1327,7 @@ In `.claude-plugin/plugin.json`, add the option to `userConfig` after `maxSecond
  }
 ```
 
-- [ ] **Step 4: Run tests, type-check and validate**
+- [x] **Step 4: Run tests, type-check and validate**
 
 Run: `claude plugin test .` → 73 pass, 0 fail. Run `tsc -p /tmp/task-progress-tsconfig.json` → no output. Run `claude plugin validate .` → `Validation passed with warnings`.
 
@@ -1342,7 +1342,7 @@ Run: `claude plugin test .` → 73 pass, 0 fail. Run `tsc -p /tmp/task-progress-
 - Consumes: `SessionRow` rows from the `sessions` atom; `$.session.send({ to: { sessionId }, text })`.
 - Produces: `parseTell(args: string): { query: string; text: string } | undefined`; `resolveTarget(rows: readonly SessionRow[], query: string): { row: SessionRow } | { error: string }`; the command `/task-progress-tell <session name> <message>` answering `Sent to <name>.`, `Not delivered to <name>: <reason>`, the usage line, or the resolve error.
 
-- [ ] **Step 1: Add the failing tests**
+- [x] **Step 1: Add the failing tests**
 
 Append to `hooks/overview.test.ts`, and change its import line to also import `parseTell` and `resolveTarget` from `./overview`:
 
@@ -1411,12 +1411,12 @@ test('the tell command explains itself when it cannot send', async ($, on) => {
 })
 ```
 
-- [ ] **Step 2: Run the tests and see them fail**
+- [x] **Step 2: Run the tests and see them fail**
 
 Run: `claude plugin test .`
 Expected: the new overview tests and the two tell tests fail (the overview test file may fail to load for the missing exports).
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 Append to `hooks/overview.ts`:
 
@@ -1496,7 +1496,7 @@ Apply this diff to `hooks/register.tsx`:
      const items = parseProgressInput(e.tasks)
 ```
 
-- [ ] **Step 4: Docs and version**
+- [x] **Step 4: Docs and version**
 
 In `README.md`, insert this section above `## Completion sound`:
 
@@ -1516,7 +1516,7 @@ Every session with the mod publishes its progress to `~/.claude/task-progress/<s
 
 In `.claude-plugin/plugin.json`, set `"version": "0.7.0"`.
 
-- [ ] **Step 5: Run tests, type-check and validate**
+- [x] **Step 5: Run tests, type-check and validate**
 
 Run: `claude plugin test .` → 78 pass, 0 fail. Run `tsc -p /tmp/task-progress-tsconfig.json` → no output. Run `claude plugin validate .` → `Validation passed with warnings`. Confirm no `.js` files appeared: `ls hooks | grep -c '\.js$'` → `0`.
 
@@ -1526,19 +1526,19 @@ Run: `claude plugin test .` → 78 pass, 0 fail. Run `tsc -p /tmp/task-progress-
 
 **Files:** none.
 
-- [ ] **Step 1: Full verification**
+- [x] **Step 1: Full verification**
 
 Run, from the repo: `claude plugin test .`, `tsc -p /tmp/task-progress-tsconfig.json`, `claude plugin validate .`
 Expected: 78 pass 0 fail; no tsc output; validation passed with warnings.
 
-- [ ] **Step 2: Sync the loaded copy**
+- [x] **Step 2: Sync the loaded copy**
 
 Run: `LOADED=$(ls -d ~/.claude/dev-mods/*/task-progress | head -1)` (the folder the user's session hot-reloads; check it is the right one if several exist), then `rsync -a --delete --exclude .git --exclude docs --exclude .superpowers --exclude '.claude-plugin/types' ./ "$LOADED/"`. Then `diff -rq . "$LOADED" -x .git -x docs -x .superpowers -x types` shows no differences.
 
-- [ ] **Step 3: Look at it with two real sessions**
+- [x] **Step 3: Look at it with two real sessions**
 
 Open a second interactive Claude Code session (any directory) with the mod loaded, give it a 4-step task list, and watch the first session's pane. Expected within about 3 s: a row for the second session with its name and `done/total`; when the second session finishes its turn the row turns `◆ … chờ bạn` and a toast appears; closing the second session removes the row within 3 s and its file `~/.claude/task-progress/<id>.json`. Then run `/task-progress-tell <name prefix> hello` and check the second session received it.
 
-- [ ] **Step 4: User sign-off**
+- [x] **Step 4: User sign-off**
 
 Report the result of step 3 to the user. Leave everything uncommitted until they ask for a commit.

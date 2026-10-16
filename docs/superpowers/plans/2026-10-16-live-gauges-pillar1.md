@@ -52,7 +52,7 @@ The spec implies these inputs, which no single task's happy-path tests would cat
   - `gauges.ts`: `readingsFromUsage(usage: unknown): Readings`, `formatGauges(readings: Readings, now: number): Segment[] | undefined` with `type Segment = { text: string; tone: 'text' | 'muted' | 'warn' }`, `resetText(resetsAt: string | undefined, now: number): string | undefined`, `limitName(kind: Limit['kind']): string`, `contextAlarm(isArmed: boolean, percent: number | undefined): { isArmed: boolean; shouldFire: boolean }`, `freshLimitAlerts(announced: ReadonlySet<string>, limits: readonly Limit[]): { fresh: Limit[]; announced: ReadonlySet<string> }`
   - `layout.ts`: `CHROME_ROWS = 7`, `stripRoom(bodyRows: number, sceneRows: number, blockRows: number, wanted: number): number`
 
-- [ ] **Step 1: Add the types.** In `types/index.d.ts`, after the `SessionRow` type and before `declare module`, add:
+- [x] **Step 1: Add the types.** In `types/index.d.ts`, after the `SessionRow` type and before `declare module`, add:
 
 ```ts
 /** One quota window as the session usage reports it. */
@@ -63,7 +63,7 @@ export type Readings = { context: number | undefined; limits: Limit[] }
 export type GaugeState = { readings: Readings; at: number }
 ```
 
-- [ ] **Step 2: Write the failing tests.** Create `hooks/gauges.test.ts`:
+- [x] **Step 2: Write the failing tests.** Create `hooks/gauges.test.ts`:
 
 ```ts
 import { expect, test } from 'claude-code/testing'
@@ -182,9 +182,9 @@ test('the strip gets the rows left after the chrome, scene, sessions block and o
 })
 ```
 
-- [ ] **Step 3: Run the tests to see them fail.** Run: `claude plugin test . 2>&1 | tail -15`. Expected: failures about missing `./gauges` and `stripRoom`.
+- [x] **Step 3: Run the tests to see them fail.** Run: `claude plugin test . 2>&1 | tail -15`. Expected: failures about missing `./gauges` and `stripRoom`.
 
-- [ ] **Step 4: Implement `hooks/gauges.ts`:**
+- [x] **Step 4: Implement `hooks/gauges.ts`:**
 
 ```ts
 import type { Limit, Readings } from '../types'
@@ -281,7 +281,7 @@ export function freshLimitAlerts(announced: ReadonlySet<string>, limits: readonl
 }
 ```
 
-- [ ] **Step 5: Implement `stripRoom` in `hooks/layout.ts`.** After `DEFAULT_BODY_ROWS` add `/** Rows of the pane that are neither scene, strip, sessions block nor tasks: padding, bar, header lines, spacer. */ export const CHROME_ROWS = 7`, and at the end of the file:
+- [x] **Step 5: Implement `stripRoom` in `hooks/layout.ts`.** After `DEFAULT_BODY_ROWS` add `/** Rows of the pane that are neither scene, strip, sessions block nor tasks: padding, bar, header lines, spacer. */ export const CHROME_ROWS = 7`, and at the end of the file:
 
 ```ts
 /** Strip lines that fit: what is left after the chrome, scene and sessions block, keeping one task row. Lines beyond drop from the bottom. */
@@ -290,7 +290,7 @@ export function stripRoom(bodyRows: number, sceneRows: number, blockRows: number
 }
 ```
 
-- [ ] **Step 6: Run the tests.** Run: `claude plugin test . 2>&1 | tail -6` — expected all pass (87 + the new ones, 0 fail). Run: `/home/vntrip/Documents/vntrip/admin-v3/node_modules/.bin/tsc -p /tmp/task-progress-tsconfig.json` — expected no output.
+- [x] **Step 6: Run the tests.** Run: `claude plugin test . 2>&1 | tail -6` — expected all pass (87 + the new ones, 0 fail). Run: `/home/vntrip/Documents/vntrip/admin-v3/node_modules/.bin/tsc -p /tmp/task-progress-tsconfig.json` — expected no output.
 
 ---
 
@@ -313,7 +313,7 @@ export function stripRoom(bodyRows: number, sceneRows: number, blockRows: number
   - `describeDoing(state: Activity, now: number): { text: string; isRunning: boolean; agents: string } | undefined`
   - `touchedDirectory(tool: string, input: Record<string, unknown>): string | undefined`
 
-- [ ] **Step 1: Add the types** to `types/index.d.ts` (before `declare module`):
+- [x] **Step 1: Add the types** to `types/index.d.ts` (before `declare module`):
 
 ```ts
 /** A tool call of this session or one of its subagents that has started and not yet finished. */
@@ -326,7 +326,7 @@ export type Activity = {
 }
 ```
 
-- [ ] **Step 2: Write the failing tests.** Create `hooks/activity.test.ts`:
+- [x] **Step 2: Write the failing tests.** Create `hooks/activity.test.ts`:
 
 ```ts
 import { expect, test } from 'claude-code/testing'
@@ -410,9 +410,9 @@ test('only Edit, Write, NotebookEdit and MultiEdit on an absolute path touch a d
 })
 ```
 
-- [ ] **Step 3: Run to see them fail.** Run: `claude plugin test . 2>&1 | tail -8` — expected: missing `./activity`.
+- [x] **Step 3: Run to see them fail.** Run: `claude plugin test . 2>&1 | tail -8` — expected: missing `./activity`.
 
-- [ ] **Step 4: Implement `hooks/activity.ts`:**
+- [x] **Step 4: Implement `hooks/activity.ts`:**
 
 ```ts
 import type { Activity } from '../types'
@@ -516,7 +516,7 @@ export function touchedDirectory(tool: string, input: Record<string, unknown>): 
 
 Note on the test `callLabel('Read', { file_path: '/a/\u001b[31mred' })`: the base name is `\u001b[31mred`, the escape becomes a space and is trimmed, giving `[31mred`.
 
-- [ ] **Step 5: Run the tests and tsc.** `claude plugin test . 2>&1 | tail -6` all pass, 0 fail; `tsc -p /tmp/task-progress-tsconfig.json` no output.
+- [x] **Step 5: Run the tests and tsc.** `claude plugin test . 2>&1 | tail -6` all pass, 0 fail; `tsc -p /tmp/task-progress-tsconfig.json` no output.
 
 ---
 
@@ -540,7 +540,7 @@ Note on the test `callLabel('Read', { file_path: '/a/\u001b[31mred' })`: the bas
   - `type RootCache = ReadonlyMap<string, string>`, `cacheRoot(cache: RootCache, dir: string, root: string): RootCache`
   - constants `MAX_TRACKED = 6`, `MAX_FAILURES = 3`
 
-- [ ] **Step 1: Add the types** to `types/index.d.ts`:
+- [x] **Step 1: Add the types** to `types/index.d.ts`:
 
 ```ts
 /** A repository's branch, changed files (tracked changes plus untracked files) and distance from its upstream. */
@@ -549,7 +549,7 @@ export type RepoStatus = { branch: string; changed: number; ahead: number; behin
 export type Repo = { root: string; touchedAt: number; status: RepoStatus | undefined; failures: number }
 ```
 
-- [ ] **Step 2: Write the failing tests.** Create `hooks/repos.test.ts`:
+- [x] **Step 2: Write the failing tests.** Create `hooks/repos.test.ts`:
 
 ```ts
 import { expect, test } from 'claude-code/testing'
@@ -661,9 +661,9 @@ test('the root cache keeps the newest 200 directories', () => {
 })
 ```
 
-- [ ] **Step 3: Run to see them fail.** `claude plugin test . 2>&1 | tail -8` — expected: missing `./repos`.
+- [x] **Step 3: Run to see them fail.** `claude plugin test . 2>&1 | tail -8` — expected: missing `./repos`.
 
-- [ ] **Step 4: Implement `hooks/repos.ts`:**
+- [x] **Step 4: Implement `hooks/repos.ts`:**
 
 ```ts
 import type { Repo, RepoStatus } from '../types'
@@ -768,7 +768,7 @@ export function cacheRoot(cache: RootCache, dir: string, root: string): RootCach
 }
 ```
 
-- [ ] **Step 5: Run the tests and tsc.** `claude plugin test . 2>&1 | tail -6` all pass; tsc no output. If a `repoLine` width assertion fails, check the arithmetic of `frame` (two for `⎇ `, two for each `  ` separator, plus the detail) against the test, not the other way round.
+- [x] **Step 5: Run the tests and tsc.** `claude plugin test . 2>&1 | tail -6` all pass; tsc no output. If a `repoLine` width assertion fails, check the arithmetic of `frame` (two for `⎇ `, two for each `  ` separator, plus the detail) against the test, not the other way round.
 
 ---
 
@@ -787,7 +787,7 @@ export function cacheRoot(cache: RootCache, dir: string, root: string): RootCach
   - `watch.ts`: `readUsage($): Promise<Readings | undefined>`, `resetWatchState(): void`, and the shared `logOnce($, key, error)` (Task 6 adds `findRoot` and `readStatus` to this file)
   - in `register.tsx`: the `gauges` atom, helper `present<T>(list): T[]`, the line `const strip = present([gaugeLine])` and the placement of `<Box flexDirection="column">{strip}</Box>` in both branches of the pane (Tasks 5 and 6 extend the array), `stripRows` used by `room`
 
-- [ ] **Step 1: Write the failing tests.** Append to `hooks/register.test.ts` (it already imports `expect, mock, test`, `On` and `Engine`; reuse `mockDisk`, `boot`, `mountPane`, `NOW`, `POLL_MS`):
+- [x] **Step 1: Write the failing tests.** Append to `hooks/register.test.ts` (it already imports `expect, mock, test`, `On` and `Engine`; reuse `mockDisk`, `boot`, `mountPane`, `NOW`, `POLL_MS`):
 
 ```ts
 const USAGE_MS = 5000
@@ -960,9 +960,9 @@ test('a short pane drops strip lines from the bottom but keeps a task row', asyn
 })
 ```
 
-- [ ] **Step 2: Run to see them fail.** `claude plugin test . 2>&1 | grep -E "fail|pass$" | tail -12` — expected: the new tests fail (no `ctx` text), the old ones pass.
+- [x] **Step 2: Run to see them fail.** `claude plugin test . 2>&1 | grep -E "fail|pass$" | tail -12` — expected: the new tests fail (no `ctx` text), the old ones pass.
 
-- [ ] **Step 3: Add the state type and the option.** In `types/index.d.ts`, change the `PluginState` line to also hold `gauges: GaugeState | undefined`. In `.claude-plugin/plugin.json` add to `userConfig` (after `isWaitSoundOn`):
+- [x] **Step 3: Add the state type and the option.** In `types/index.d.ts`, change the `PluginState` line to also hold `gauges: GaugeState | undefined`. In `.claude-plugin/plugin.json` add to `userConfig` (after `isWaitSoundOn`):
 
 ```json
     "isContextWarningOn": {
@@ -973,7 +973,7 @@ test('a short pane drops strip lines from the bottom but keeps a task row', asyn
     }
 ```
 
-- [ ] **Step 4: Create `hooks/watch.ts`:**
+- [x] **Step 4: Create `hooks/watch.ts`:**
 
 ```ts
 import type { EngineInterface } from 'claude-code'
@@ -1012,7 +1012,7 @@ export async function readUsage($: EngineInterface): Promise<Readings | undefine
 }
 ```
 
-- [ ] **Step 5: Wire `hooks/register.tsx`.**
+- [x] **Step 5: Wire `hooks/register.tsx`.**
   1. Imports. Add after the `./compositor` import: `import { contextAlarm, formatGauges, freshLimitAlerts, limitName, resetText } from './gauges'`. Change the `./layout` import to `import { CHROME_ROWS, DEFAULT_BODY_ROWS, MAX_SCENE_COLUMNS, litWindows, sceneLayout, stripRoom } from './layout'`. Add `import { readUsage, resetWatchState } from './watch'` after the `./sync` import. Change the types import to `import type { GaugeState, Item, SessionRow, TaskStatus } from '../types'`.
   2. Constants, after `POLL_MS`:
 
@@ -1119,7 +1119,7 @@ async function refreshGauges($: EngineInterface): Promise<void> {
 
   Place `{stripBlock}` in the pane: in the `total === 0` branch, between the `No tasks yet` `<Text>` and `{sessionBlock}`; in the other branch, between the `{isStale && …}` line and `{sessionBlock}`.
 
-- [ ] **Step 6: Run everything.** `claude plugin test . 2>&1 | tail -6` all pass, 0 fail; `tsc -p /tmp/task-progress-tsconfig.json` no output; `claude plugin validate . 2>&1 | tail -6` passes (warnings fine). If the validator rejects a call, the cause is a `$` passed somewhere that is not a top-level function: move that code into a top-level function.
+- [x] **Step 6: Run everything.** `claude plugin test . 2>&1 | tail -6` all pass, 0 fail; `tsc -p /tmp/task-progress-tsconfig.json` no output; `claude plugin validate . 2>&1 | tail -6` passes (warnings fine). If the validator rejects a call, the cause is a `$` passed somewhere that is not a top-level function: move that code into a top-level function.
 
 ---
 
@@ -1134,7 +1134,7 @@ async function refreshGauges($: EngineInterface): Promise<void> {
 - Consumes: Task 2's `EMPTY_ACTIVITY`, `begin`, `end`, `callLabel`, `describeDoing`; Task 4's `present`, `strip`, `stripBlock`, `isOk`, `LIST_TOOLS`.
 - Produces for Task 6: `endCall($, e, id, isSuccess)` where Task 6 adds the repository tracking inside it; the `doingLine` element in the `present([…])` array.
 
-- [ ] **Step 1: Write the failing tests.** Append to `hooks/register.test.ts`:
+- [x] **Step 1: Write the failing tests.** Append to `hooks/register.test.ts`:
 
 ```ts
 const activitySetup = async ($: Engine, on: On) => {
@@ -1226,9 +1226,9 @@ test('the hook leaves the result alone, and a tool that throws leaves no running
 })
 ```
 
-- [ ] **Step 2: Run to see them fail.** `claude plugin test . 2>&1 | grep -E "fail" | tail -8` — the first three new tests fail (if `$.tool.call` wraps the tool's answer in more fields than `{ result }`, compare the `result` field in the fourth test and in the git-missing test of Task 6, not the whole value; likewise if `ui.find` inside a core hook needs `await clock.settle()` first, add it); the fourth may pass already for the `Read` result and fail for nothing else — that is fine, it is a guard.
+- [x] **Step 2: Run to see them fail.** `claude plugin test . 2>&1 | grep -E "fail" | tail -8` — the first three new tests fail (if `$.tool.call` wraps the tool's answer in more fields than `{ result }`, compare the `result` field in the fourth test and in the git-missing test of Task 6, not the whole value; likewise if `ui.find` inside a core hook needs `await clock.settle()` first, add it); the fourth may pass already for the `Read` result and fail for nothing else — that is fine, it is a guard.
 
-- [ ] **Step 3: Wire `hooks/register.tsx`.**
+- [x] **Step 3: Wire `hooks/register.tsx`.**
   1. Imports: add `import { EMPTY_ACTIVITY, begin, callLabel, describeDoing, end } from './activity'`; the types import becomes `import type { Activity, GaugeState, Item, SessionRow, TaskStatus } from '../types'` (keep alphabetical order as the file does).
   2. Atom, after `gauges`: `const activity = atom({ plugin: 'task-progress', key: 'activity' } as const, EMPTY_ACTIVITY as Activity)`.
   3. Module counter, after `isReadingUsage`: `let callSeq = 0`, and reset it with the others in `register` (`callSeq = 0`).
@@ -1295,7 +1295,7 @@ async function endCall($: EngineInterface, e: { tool: string; agentId?: string }
 
   and change `present([gaugeLine])` to `present([gaugeLine, doingLine])`.
 
-- [ ] **Step 4: Run everything.** Tests all pass, tsc clean, validate passes. The validator may warn "gating hook without .catch: tool.call"; that warning is expected and intended.
+- [x] **Step 4: Run everything.** Tests all pass, tsc clean, validate passes. The validator may warn "gating hook without .catch: tool.call"; that warning is expected and intended.
 
 ---
 
@@ -1311,7 +1311,7 @@ async function endCall($: EngineInterface, e: { tool: string; agentId?: string }
 - Consumes: Task 3's `parseStatus` (inside `watch.ts`), `touchRepo`, `applyReading`, `visibleRepos`, `repoName`, `repoLine`, `cacheRoot`, `RootCache`; Task 2's `touchedDirectory`; Task 5's `endCall`.
 - Produces: the finished strip: `repoLines` in the `present([…])` array.
 
-- [ ] **Step 1: Extend `mockDisk` and write the failing tests.** In `hooks/register.test.ts`, give the `Disk` type two more fields — `git: string[][]` and `gitReply: (argv: readonly string[]) => { exitCode: number; stdout: string; isStdoutTruncated?: boolean }` — initialise them in `mockDisk` (`git: []`, and a default `gitReply` that answers `exitCode: 128, stdout: ''`), and in its `process.run` handler add, before the final `else`, a branch:
+- [x] **Step 1: Extend `mockDisk` and write the failing tests.** In `hooks/register.test.ts`, give the `Disk` type two more fields — `git: string[][]` and `gitReply: (argv: readonly string[]) => { exitCode: number; stdout: string; isStdoutTruncated?: boolean }` — initialise them in `mockDisk` (`git: []`, and a default `gitReply` that answers `exitCode: 128, stdout: ''`), and in its `process.run` handler add, before the final `else`, a branch:
 
 ```ts
     } else if (e.argv[0] === 'git') {
@@ -1519,9 +1519,9 @@ test('a failing Edit does not make its directory a touched repository', async ($
 })
 ```
 
-- [ ] **Step 2: Run to see them fail.** `claude plugin test . 2>&1 | grep -E "fail" | tail -12` — the new tests fail; the earlier ones still pass.
+- [x] **Step 2: Run to see them fail.** `claude plugin test . 2>&1 | grep -E "fail" | tail -12` — the new tests fail; the earlier ones still pass.
 
-- [ ] **Step 3: Add the git reads to `hooks/watch.ts`:**
+- [x] **Step 3: Add the git reads to `hooks/watch.ts`:**
 
 ```ts
 import { parseStatus } from './repos'
@@ -1565,7 +1565,7 @@ export async function readStatus($: EngineInterface, root: string): Promise<Repo
 
   Merge the new imports with the existing import block at the top of the file (one `import type` for `Readings` and `RepoStatus`, one `./repos` import).
 
-- [ ] **Step 4: Wire `hooks/register.tsx`.**
+- [x] **Step 4: Wire `hooks/register.tsx`.**
   1. Imports: `import { touchedDirectory } from './activity'` joins the existing activity import; add `import { applyReading, cacheRoot, repoLine, repoName, touchRepo, visibleRepos } from './repos'` and `import type { RootCache } from './repos'`; `import { findRoot, readStatus, readUsage, resetWatchState } from './watch'`; the types import gains `Repo`.
   2. Constant: `const GIT_POLL_MS = 10_000`. Module state after `callSeq`: `let roots: RootCache = new Map()` and `let isPollingRepos = false`; reset both in `register` (`roots = new Map()`, `isPollingRepos = false`).
   3. Atom: `const repos = atom({ plugin: 'task-progress', key: 'repos' } as const, [] as Repo[])`.
@@ -1646,7 +1646,7 @@ async function pollRepos($: EngineInterface): Promise<void> {
 
   and change `present([gaugeLine, doingLine])` to `present([gaugeLine, doingLine, ...repoLines, moreLine])`.
 
-- [ ] **Step 5: Run everything.** `claude plugin test . 2>&1 | tail -6` all pass, 0 fail; tsc clean; `claude plugin validate .` passes. Check `wc -l hooks/register.tsx` is under 800.
+- [x] **Step 5: Run everything.** `claude plugin test . 2>&1 | tail -6` all pass, 0 fail; tsc clean; `claude plugin validate .` passes. Check `wc -l hooks/register.tsx` is under 800.
 
 ---
 
@@ -1657,15 +1657,15 @@ async function pollRepos($: EngineInterface): Promise<void> {
 
 **Interfaces:** consumes the finished feature; produces the release state `0.8.0`, still uncommitted.
 
-- [ ] **Step 1: README.** Add a section `## Live strip` after "Other sessions": what the three lines show (gauges with bars and the 80% tone; the doing line with `+N agents`; one line per repository the session edited, `●N` changed files incl. untracked, `✓` when clean, `↑`/`↓` distance from the upstream, `+N repos` beyond three), what counts as touching a repository (Edit, Write, NotebookEdit, MultiEdit, by the session or a subagent; not Bash), how often it refreshes (usage 5 s, git 10 s, `--no-optional-locks`), the two toasts and the `isContextWarningOn` option, and that a pane too short drops lines from the bottom. Also add `isContextWarningOn` to the options list if the README has one. Keep it to what the code does.
+- [x] **Step 1: README.** Add a section `## Live strip` after "Other sessions": what the three lines show (gauges with bars and the 80% tone; the doing line with `+N agents`; one line per repository the session edited, `●N` changed files incl. untracked, `✓` when clean, `↑`/`↓` distance from the upstream, `+N repos` beyond three), what counts as touching a repository (Edit, Write, NotebookEdit, MultiEdit, by the session or a subagent; not Bash), how often it refreshes (usage 5 s, git 10 s, `--no-optional-locks`), the two toasts and the `isContextWarningOn` option, and that a pane too short drops lines from the bottom. Also add `isContextWarningOn` to the options list if the README has one. Keep it to what the code does.
 
-- [ ] **Step 2: Version.** `.claude-plugin/plugin.json`: `"version": "0.8.0"`.
+- [x] **Step 2: Version.** `.claude-plugin/plugin.json`: `"version": "0.8.0"`.
 
-- [ ] **Step 3: Spec refinements.** In the spec, make these three edits so it matches the code: (a) in "The strip", item 3: replace "at most 3, then `+N repos` if there are more" with "up to 3; from 4 on, 2 are shown and `+N repos` counts the rest, so the strip stays at 5 lines at most", and add "a clean repository shows `✓` instead of `●0`"; (b) in "Units" for `repos.ts` and in "Data flow": replace "least-recently-used cache of at most 200 entries" with "bounded cache of the 200 newest directories, successes only (a failed lookup is retried at the next edit)"; (c) change the Status line to "approved 2026-10-16; implemented as v0.8.0".
+- [x] **Step 3: Spec refinements.** In the spec, make these three edits so it matches the code: (a) in "The strip", item 3: replace "at most 3, then `+N repos` if there are more" with "up to 3; from 4 on, 2 are shown and `+N repos` counts the rest, so the strip stays at 5 lines at most", and add "a clean repository shows `✓` instead of `●0`"; (b) in "Units" for `repos.ts` and in "Data flow": replace "least-recently-used cache of at most 200 entries" with "bounded cache of the 200 newest directories, successes only (a failed lookup is retried at the next edit)"; (c) change the Status line to "approved 2026-10-16; implemented as v0.8.0".
 
-- [ ] **Step 4: Full check.** Run `claude plugin test . 2>&1 | tail -4`, `tsc -p /tmp/task-progress-tsconfig.json`, `claude plugin validate . 2>&1 | tail -4`, `find hooks -name '*.js'` (must print nothing).
+- [x] **Step 4: Full check.** Run `claude plugin test . 2>&1 | tail -4`, `tsc -p /tmp/task-progress-tsconfig.json`, `claude plugin validate . 2>&1 | tail -4`, `find hooks -name '*.js'` (must print nothing).
 
-- [ ] **Step 5: Real-process check.** Create a scratch git repository and a headless run that edits a file in it, with the mod loaded, and confirm the mod does not break the run and exits promptly:
+- [x] **Step 5: Real-process check.** Create a scratch git repository and a headless run that edits a file in it, with the mod loaded, and confirm the mod does not break the run and exits promptly:
 
 ```bash
 S=/tmp/claude-1000/-home-vntrip-Documents-vntrip/4c2555ac-2f03-450a-8d3e-1fa42f1adde7/scratchpad/pillar1-live
@@ -1675,6 +1675,6 @@ echo "Edit a.txt: replace a with b, then run Bash: sleep 12, then say done." | t
 
   Expected: `done`, and the run ends without hanging. The strip itself is drawn only in a terminal pane, so it is checked by the user in step 7.
 
-- [ ] **Step 6: Sync the loaded copy.** `rsync -a --delete --exclude .git --exclude node_modules --exclude docs --exclude tools ~/claude-mods/task-progress/ ~/.claude/dev-mods/4c2555ac-2f03-450a-8d3e-1fa42f1adde7/task-progress/` (the loaded copy hot-reloads when the turn ends).
+- [x] **Step 6: Sync the loaded copy.** `rsync -a --delete --exclude .git --exclude node_modules --exclude docs --exclude tools ~/claude-mods/task-progress/ ~/.claude/dev-mods/4c2555ac-2f03-450a-8d3e-1fa42f1adde7/task-progress/` (the loaded copy hot-reloads when the turn ends).
 
-- [ ] **Step 7: Hand over.** Report to the user: what to look at in the real pane (gauges match `/status`; the doing line during a long tool; edit a file in a service repo and see its branch line within 10 s; a second repo adds a line; no lag on `git commit` in a tracked repo), and that nothing is committed.
+- [x] **Step 7: Hand over.** Report to the user: what to look at in the real pane (gauges match `/status`; the doing line during a long tool; edit a file in a service repo and see its branch line within 10 s; a second repo adds a line; no lag on `git commit` in a tracked repo), and that nothing is committed.
