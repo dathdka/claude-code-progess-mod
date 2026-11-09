@@ -8,6 +8,8 @@ const PROJECT_PLANS = '/docs/superpowers/plans/'
 const MAX_ROWS = 24
 const NAME_MAX = 60
 const LINE_MAX = 512
+/** A table row may be longer than a heading: the Status cell is often the last one. */
+const ROW_MAX = 4096
 const BAR_CELLS = 8
 const CONTROL_CHARS = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/g
 const FENCE = /^\s*(`{3,}|~{3,})/
@@ -36,7 +38,8 @@ const statusOf = (cell: string): RoadmapStatus => (DONE.test(cell) ? 'done' : AC
  * state from that one. Undefined when there is no such table. Tables in code fences are ignored.
  */
 export function parseRoadmap(text: string): RoadmapPhase[] | undefined {
-  const lines = text.split(/\r?\n/).map(l => (l.length > LINE_MAX ? l.slice(0, LINE_MAX) : l))
+  const raw = text.split(/\r?\n/)
+  const lines = raw.map(l => (l.length > LINE_MAX ? l.slice(0, LINE_MAX) : l))
   let fence: string | undefined
   for (let i = 0; i + 1 < lines.length; i += 1) {
     const line = lines[i] ?? ''
@@ -53,7 +56,7 @@ export function parseRoadmap(text: string): RoadmapPhase[] | undefined {
     const column = cellsOf(line).findIndex(c => STATUS_HEADER.test(c))
     if (column <= 0) continue
 
-    return tableRows(lines.slice(i + 2), column)
+    return tableRows(raw.slice(i + 2).map(l => l.slice(0, ROW_MAX)), column)
   }
 
   return undefined

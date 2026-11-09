@@ -81,3 +81,8 @@ test('a saved roadmap of another shape reads as none', () => {
   expect(roadmapPhasesOf({ phases: 1 })).toEqual([])
   expect(roadmapPhasesOf([{ name: 'A', status: 'done' }])).toEqual([{ name: 'A', status: 'done' }])
 })
+
+test('a long row still has its status read', () => {
+  const text = `| Phase | Goal | Status |\n|---|---|---|\n| P0 | ${'g'.repeat(600)} | done |\n`
+  expect(parseRoadmap(text)).toEqual([{ name: 'P0', status: 'done' }])
+})
