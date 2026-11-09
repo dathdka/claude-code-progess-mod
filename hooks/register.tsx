@@ -2,20 +2,21 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
 import type { Activity, GaugeState, Item, PlanState, PlanView, Repo, RoadmapPhase, SessionRow, TaskStatus, TrackedPlan } from '../types'
+import { sessionBlock, stripLines } from './blocks'
 import { sceneCells } from './compositor'
 import { isOk, mark, parseProgressInput, present, summarize, withReminder } from './helpers'
 import { EMPTY_ACTIVITY, begin, callLabel, describeDoing, end, touchedDirectory } from './activity'
 import { CARD_PADDING, DEFAULT_COLUMNS, DEFAULT_SOUND_SECONDS, GAUGE_STALE_MS, GIT_POLL_MS, LIST_TOOLS, MAX_SOUND_SECONDS, MIN_SOUND_SECONDS, PLAN_MS, POLL_MS, PROGRESS_TOOL, PROGRESS_TOOL_SPEC, STALE_CALLS, TELL_USAGE, USAGE_MS, USAGE_PROMPT } from './constants'
 import { contextAlarm, formatGauges, freshLimitAlerts, limitName, resetText } from './gauges'
 import { CHROME_ROWS, DEFAULT_BODY_ROWS, MAX_SCENE_COLUMNS, litWindows, sceneLayout, stripRoom } from './layout'
-import { describeRow, layoutRow, newlyWaiting, parseTell, resolveTarget, visibleRows } from './overview'
+import { newlyWaiting, parseTell, resolveTarget, visibleRows } from './overview'
 import { MAX_BYTES, NO_ANNOUNCED, applyDoneRecent, currentPhase, freshPhases, isCleanPlanPath, mergePlans, parsePlan, phaseDoneCount, planPathOf, plansOf, shouldResetFocus, touchPlanState, withLedgerState, withParsed } from './plan'
 import type { Announced } from './plan'
 import { MAX_LIST_ROWS, phaseLines, phaseNumber, shownFocus, taskLines, toneColor } from './planview'
 import type { PlanLine } from './planview'
-import { roadmapLine, roadmapPaths, roadmapPhasesOf } from './roadmap'
+import { roadmapLine, roadmapPaths, roadmapPhasesOf, roadmapProgress, roadmapRows } from './roadmap'
 import { isAllDone, timingText } from './progress'
-import { applyReading, cacheRoot, repoLine, repoName, touchRepo, visibleRepos } from './repos'
+import { applyReading, cacheRoot, touchRepo, visibleRepos } from './repos'
 import type { RootCache } from './repos'
 import { playDone, soundPath } from './sound'
 import { COLORS, barParts, truncate } from './style'
@@ -318,10 +319,10 @@ async function setPlan($: EngineInterface, args: string): Promise<string> {
   return `Following ${path}.`
 }
 
-/** The Todo/Plan button: the pane switches to the other view. */
-async function toggleView($: EngineInterface): Promise<void> {
+/** The Plan and Roadmap buttons: the pane shows that view, or the todo list when it already does. */
+async function toggleView($: EngineInterface, target: 'plan' | 'roadmap'): Promise<void> {
   try {
-    await update($, viewAtom, (v): PlanView => ({ ...v, view: v.view === 'plan' ? 'todo' : 'plan' }))
+    await update($, viewAtom, (v): PlanView => ({ ...v, view: v.view === target ? 'todo' : target }))
   } catch {
     // a button is a side effect: it must never throw into the pane
   }
@@ -596,14 +597,18 @@ export const register: Register = (on, options) => {
     const doing = describeDoing(await read($, activity), now)
     const shownRepos = visibleRepos(await read($, repos))
     const gaugeState = await read($, gauges)
-    const plan = mergePlans(await appliedPlans($))
+    const applied = await appliedPlans($)
+    const plan = mergePlans(applied)
     const view = await read($, viewAtom)
     const isPlanView = plan !== null && view.view === 'plan'
     const planTasks = plan === null ? 0 : plan.phases.reduce((sum, p) => sum + p.tasks.length, 0)
     const planDone = plan === null ? 0 : plan.phases.reduce((sum, p) => sum + phaseDoneCount(p), 0)
     const planPercent = planTasks === 0 ? 0 : Math.round((planDone / planTasks) * 100)
     const roadmap = roadmapPhasesOf(await read($, roadmapAtom))
-    const roadmapRows = roadmap.length === 0 ? 0 : 1
+    const roadmapCount = roadmap.length === 0 ? 0 : 1
+    const isRoadmapView = roadmapCount === 1 && view.view === 'roadmap'
+    const roadmapPercent = roadmapCount === 0 ? 0 : Math.round((roadmap.filter(p => p.status === 'done').length / roadmap.length) * 100)
+    const toggleCount = plan !== null || roadmapCount === 1 ? 1 : 0
 
     const available = Math.max(1, (e.props.bodyColumns ?? DEFAULT_COLUMNS + 2 * CARD_PADDING) - 2 * CARD_PADDING)
     const inner = Math.min(MAX_SCENE_COLUMNS, available)
@@ -621,62 +626,16 @@ export const register: Register = (on, options) => {
         />
       )
 
-    const sessionBlock = (
-      <Box flexDirection="column">
-        {shown.map(row => {
-          const text = layoutRow(describeRow(row, now), inner)
-          const tone = row.state === 'waiting' ? COLORS.accent : row.state === 'busy' ? COLORS.text : COLORS.muted
-
-          return (
-            <Text>
-              <Text color={tone}>{text.head}</Text>
-              <Text color={COLORS.muted}>{text.progress}</Text>
-              <Text color={row.state === 'waiting' ? COLORS.accent : COLORS.muted}> {text.detail}</Text>
-            </Text>
-          )
-        })}
-        {more > 0 && <Text color={COLORS.muted}>+{more} more</Text>}
-      </Box>
-    )
-
-    const gaugeLine =
-      gaugeSegments === undefined ? null : (
-        <Text>
-          {gaugeSegments.map(segment => (
-            <Text color={segment.tone === 'warn' ? COLORS.warn : segment.tone === 'muted' ? COLORS.muted : COLORS.text}>{segment.text}</Text>
-          ))}
-        </Text>
-      )
-    const agentRoom = doing === undefined || doing.agents === '' ? 0 : doing.agents.length + 1
-    const doingLine =
-      doing === undefined ? null : (
-        <Text>
-          <Text color={doing.isRunning ? COLORS.active : COLORS.muted}>{truncate(doing.text, Math.max(1, inner - agentRoom))}</Text>
-          {doing.agents !== '' && <Text color={COLORS.accent}> {doing.agents}</Text>}
-        </Text>
-      )
-    const repoLines = shownRepos.shown.map(repo => {
-      const parts = repoLine(repoName(repo.root), repo.status as NonNullable<Repo['status']>, inner)
-
-      return (
-        <Text>
-          <Text color={COLORS.muted}>⎇ </Text>
-          <Text color={COLORS.text}>{parts.name}</Text>
-          <Text color={COLORS.accent}>{`  ${parts.branch}`}</Text>
-          <Text color={(repo.status?.changed ?? 0) > 0 ? COLORS.active : COLORS.success}>{`  ${parts.detail}`}</Text>
-        </Text>
-      )
-    })
-    const moreLine = shownRepos.more > 0 ? <Text color={COLORS.muted}>+{shownRepos.more} repos</Text> : null
-    const wanted = present([gaugeLine, doingLine, ...repoLines, moreLine])
-    const strip = wanted.slice(0, stripRoom(bodyRows, layout?.rows ?? 0, blockRows + (plan === null ? 0 : 1) + roadmapRows, wanted.length))
+    const sessions_ = sessionBlock(ui, shown, more, now, inner)
+    const wanted = present(stripLines(ui, gaugeSegments, doing, shownRepos, inner))
+    const strip = wanted.slice(0, stripRoom(bodyRows, layout?.rows ?? 0, blockRows + toggleCount + roadmapCount, wanted.length))
     const stripBlock = <Box flexDirection="column">{strip}</Box>
-    const room = Math.max(1, bodyRows - CHROME_ROWS - (layout?.rows ?? 0) - blockRows - strip.length - (plan === null ? 0 : 1) - roadmapRows)
+    const room = Math.max(1, bodyRows - CHROME_ROWS - (layout?.rows ?? 0) - blockRows - strip.length - toggleCount - roadmapCount)
     const shownItems = [
       ...items.filter(i => i.status === 'in_progress'),
       ...items.filter(i => i.status !== 'in_progress'),
     ].slice(0, room)
-    const barPercent = isPlanView ? planPercent : percent
+    const barPercent = isRoadmapView ? roadmapPercent : isPlanView ? planPercent : percent
     const { filled, rest } = barParts(barPercent, inner)
     const barAccent = barPercent === 100 ? COLORS.success : COLORS.accent
     const accent = percent === 100 ? COLORS.success : COLORS.accent
@@ -687,18 +646,28 @@ export const register: Register = (on, options) => {
         {line.text}
       </Text>
     )
-    const roadmapShown = roadmapRows === 0 ? undefined : roadmapLine(roadmap, inner)
+    const roadmapShown = roadmapCount === 0 ? undefined : roadmapLine(roadmap, inner)
     const roadmapRow = roadmapShown === undefined ? null : <Text color={roadmapShown.isDone ? COLORS.success : COLORS.accent}>{roadmapShown.text}</Text>
     const toggleRow =
-      plan === null ? null : (
+      toggleCount === 0 ? null : (
         <Box>
-          <Button key="plan-toggle" label={isPlanView ? 'Todo' : 'Plan'} onPress={() => toggleView($)} />
+          {plan !== null && <Button key="plan-toggle" label={isPlanView ? 'Todo' : 'Plan'} onPress={() => toggleView($, 'plan')} />}
+          {plan !== null && roadmapCount === 1 && <Text> </Text>}
+          {roadmapCount === 1 && <Button key="roadmap-toggle" label={isRoadmapView ? 'Todo' : 'Roadmap'} onPress={() => toggleView($, 'roadmap')} />}
         </Box>
       )
+    // drawn besides the rows: padding (2) + bar (1) + roadmap line (1) + buttons (1) + scene + strip + sessions
+    const roadmapBlock = !isRoadmapView ? null : (
+      <Box flexDirection="column">
+        {stripBlock}
+        {sessions_}
+        {roadmapRows(roadmap, roadmapProgress(roadmap, applied), Math.max(1, bodyRows - 5 - (layout?.rows ?? 0) - blockRows - strip.length), inner).map(drawLine)}
+      </Box>
+    )
     const current = plan === null ? 0 : currentPhase(plan)
     const focus = plan === null ? 0 : shownFocus(view.focus, view.pressedAt, now, current, plan.phases.length)
     // drawn: padding (2) + bar (1) + toggle row (1) + scene + sessions + strip; the header and the focus header are taken from this room
-    const planRoom = Math.max(1, bodyRows - 4 - (layout?.rows ?? 0) - blockRows - strip.length - roadmapRows)
+    const planRoom = Math.max(1, bodyRows - 4 - (layout?.rows ?? 0) - blockRows - strip.length - roadmapCount)
     const listRows = plan === null ? 0 : Math.max(1, Math.min(MAX_LIST_ROWS, plan.phases.length, planRoom - 5))
     const headerPrefix = `${planPercent}%  ${planDone}/${planTasks} · `
     // one phase named like the plan: the header and the phase row show the name already
@@ -716,7 +685,7 @@ export const register: Register = (on, options) => {
             </Text>
           </Text>
           {stripBlock}
-          {sessionBlock}
+          {sessions_}
           {phaseLines(plan, focus, current, listRows, inner).map(drawLine)}
           <Box>
             <Text color={COLORS.accent}>
@@ -746,11 +715,11 @@ export const register: Register = (on, options) => {
         </Text>
         {roadmapRow}
         {toggleRow}
-        {isPlanView ? planBlock : total === 0 ? (
+        {isRoadmapView ? roadmapBlock : isPlanView ? planBlock : total === 0 ? (
           <Box flexDirection="column">
             <Text color={COLORS.muted}>No tasks yet. They appear when Claude plans work.</Text>
             {stripBlock}
-            {sessionBlock}
+            {sessions_}
           </Box>
         ) : (
           <Box flexDirection="column">
@@ -766,7 +735,7 @@ export const register: Register = (on, options) => {
             {timing !== '' && <Text color={COLORS.muted}>{timing}</Text>}
             {isStale && <Text color={COLORS.warn}>⚠ no update for {idle} tool calls</Text>}
             {stripBlock}
-            {sessionBlock}
+            {sessions_}
             <Text> </Text>
             {shownItems.map(i => (
               <Text>

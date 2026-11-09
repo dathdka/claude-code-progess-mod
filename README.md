@@ -87,6 +87,21 @@ Roadmap 2/9  ✔P0 ✔P1 ▶P2a ○P2b ○P3 ○P4 ○Gate ○P5 ○P6+
 - **How it is read:** the first Markdown table whose header has a `Status` (or `State`) column, outside code fences. Each row is a phase named by its first cell (emphasis, code ticks and link targets removed). `done`, `complete(d)`, `finished`, `shipped`, `✅`, `✔`, `x` count as done; `in_progress`, `in progress`, `active`, `wip`, `doing`, `current`, `started`, `🚧`, `▶` as current; anything else as waiting. At most 24 rows.
 - **Narrow panes:** when the phases do not fit, the line shrinks to `Roadmap 2/9 ▰▰▱▱▱▱▱▱ ▶ P2a` (the current phase, or the next one), cut to the width. The line turns green when every phase is done. Without a roadmap there is no line.
 
+### Roadmap view
+
+A `[ Roadmap ]` button (beside `[ Plan ]` when a plan is tracked) switches the pane to one row per phase; the bar then shows the share of phases done, and the button reads `Todo` to go back:
+
+```
+✔ P0    Repo + harness: Godot project, headless CI tests, share…
+✔ P1    Networked sandbox: ENet 2 windows, move/aim/dash/shove,…
+▶ P2a   Effect engine (triggers, primitives, stats, proj…  13/18
+○ P2b   Corruption levels + mutations + demon dice (DEMON strea…
+```
+
+- **Goal:** the row's `Goal` column (or `Description`, `Summary`, `Objective`, `Scope`); without one, the first column other than the name and the status.
+- **Plan progress:** a phase shows `done/total` of the tracked plans that belong to it: a plan whose file name has the phase name as a word (`2026-11-06-p2a-effect-engine.md` for `P2a`), or a `.md` file its row links to. Tasks count as done as in the plan view (boxes, `Task N` todos, the ledger).
+- **Short panes:** the list scrolls to keep the current phase, with `↑ N` and `… +N` for the rows left out.
+
 ## Completion sound
 
 When every task in the list is completed, a short jingle plays once (`sounds/done.wav`). It uses the first player that works: `afplay` (macOS), then `pw-play`, `paplay`, `aplay`, `ffplay`. Options (`/config` or `pluginConfigs`):

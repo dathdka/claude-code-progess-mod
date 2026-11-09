@@ -49,11 +49,12 @@ export type TrackedPlan = { path: string; plan: Plan | null; lastTouchedAt: numb
 /** The plan files the session follows, in order of first touch, and whether the user pinned one by hand (touches then add none). */
 export type PlanState = { plans: TrackedPlan[]; isPinned: boolean }
 /** Which view the pane shows, which phase the user moved the focus to (null follows the current phase), and when. */
-export type PlanView = { view: 'todo' | 'plan'; focus: number | null; pressedAt: number }
+export type PlanView = { view: 'todo' | 'plan' | 'roadmap'; focus: number | null; pressedAt: number }
 
 /** A phase of the project roadmap (a Markdown table with a Status column) and its state. */
 export type RoadmapStatus = 'done' | 'active' | 'pending'
-export type RoadmapPhase = { name: string; status: RoadmapStatus }
+/** `goal` is the row's goal cell ('' without one); `plans` the file names of the .md files the row links to. */
+export type RoadmapPhase = { name: string; status: RoadmapStatus; goal: string; plans: string[] }
 
 declare module 'claude-code' {
   interface PluginState {

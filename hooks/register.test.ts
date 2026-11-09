@@ -2246,3 +2246,56 @@ test('a short pane with a roadmap still keeps a task row in both views', async (
   expect(await textsOf(planUi, /^① Phase 1: Base +$/)).toBe(1)
   await planUi.unmount()
 })
+
+const ROADMAP_P2A = `| Phase | Goal | Status |
+|---|---|---|
+| P0 | Base harness | done |
+| P1 | Net sandbox | done |
+| P2a | Effect engine | in_progress |
+| P2b | Demon | not_started |
+`
+const P2A_PLAN = '/w/docs/plans/2026-11-06-p2a-effect-engine.md'
+
+test('a roadmap alone gives a Roadmap button whose view lists the phases with their goals, and Todo goes back', async ($, on) => {
+  const { clock, disk } = await planSetup($, on)
+  disk.put('/work/docs/superpowers/plans/roadmap.md', ROADMAP_P2A)
+  await clock.advance(5000)
+  const ui = await mountPane($)
+  expect(await ui.find({ key: 'plan-toggle' })).toBeUndefined()
+  expect((await ui.find({ key: 'roadmap-toggle' }))?.props.label).toBe('Roadmap')
+  await ui.press({ key: 'roadmap-toggle' })
+  expect((await ui.find({ key: 'roadmap-toggle' }))?.props.label).toBe('Todo')
+  expect(await ui.find({ type: 'Text', text: /^✔ P0 +Base harness$/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /^▶ P2a +Effect engine$/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /^○ P2b +Demon$/ })).toBeDefined()
+  await ui.press({ key: 'roadmap-toggle' })
+  expect(await ui.find({ type: 'Text', text: /^○ P2b +Demon$/ })).toBeUndefined()
+  expect(await ui.find({ type: 'Text', text: /No tasks yet/ })).toBeDefined()
+  await ui.unmount()
+})
+
+test('the roadmap view shows the progress of the tracked plan named after the phase, and Plan switches views', async ($, on) => {
+  const { clock, disk } = await planSetup($, on)
+  disk.put(P2A_PLAN, PLAN_TEXT)
+  disk.put('/w/docs/plans/roadmap.md', ROADMAP_P2A)
+  await $.tool.call({ tool: 'Read', file_path: P2A_PLAN } as never)
+  await clock.settle()
+  const ui = await mountPane($)
+  await ui.press({ key: 'roadmap-toggle' })
+  expect(await ui.find({ type: 'Text', text: /^▶ P2a +Effect engine +1\/3$/ })).toBeDefined()
+  expect((await ui.find({ key: 'plan-toggle' }))?.props.label).toBe('Plan')
+  await ui.press({ key: 'plan-toggle' })
+  expect(await ui.find({ type: 'Text', text: /Phase 1: Base/ })).toBeDefined()
+  expect((await ui.find({ key: 'roadmap-toggle' }))?.props.label).toBe('Roadmap')
+  await ui.unmount()
+})
+
+test('a short pane in the roadmap view still shows the current phase', async ($, on) => {
+  const { clock, disk } = await planSetup($, on)
+  disk.put('/work/docs/superpowers/plans/roadmap.md', ROADMAP_P2A)
+  await clock.advance(5000)
+  const ui = await mountPlanPane($, 8)
+  await ui.press({ key: 'roadmap-toggle' })
+  expect(await ui.find({ type: 'Text', text: /^▶ P2a/ })).toBeDefined()
+  await ui.unmount()
+})
