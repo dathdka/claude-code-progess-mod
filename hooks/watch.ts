@@ -1,9 +1,10 @@
 import type { EngineInterface } from 'claude-code'
 
-import type { Readings, RepoStatus } from '../types'
+import type { Readings, RepoStatus, RoadmapPhase } from '../types'
 import { readingsFromUsage } from './gauges'
 import { MAX_BYTES, ledgerDone, ledgerPathFor } from './plan'
 import { parseStatus } from './repos'
+import { parseRoadmap } from './roadmap'
 
 /** Failures already told to the debug channel, by kind: each kind is logged once. */
 const logged = new Set<string>()
@@ -81,4 +82,19 @@ export async function readLedger($: EngineInterface, planPath: string): Promise<
   } catch {
     return undefined
   }
+}
+
+/** The first of `paths` that holds a roadmap table, with its path and text as `source`; undefined when none does (a missing file is normal: never logged). */
+export async function readRoadmap($: EngineInterface, paths: readonly string[]): Promise<{ source: string; phases: RoadmapPhase[] } | undefined> {
+  for (const path of paths) {
+    try {
+      const text = await $.fs.read(path)
+      const phases = typeof text === 'string' && text.length <= MAX_BYTES ? parseRoadmap(text) : undefined
+      if (phases !== undefined) return { source: `${path}\n${text}`, phases }
+    } catch {
+      // no roadmap at this path
+    }
+  }
+
+  return undefined
 }

@@ -51,8 +51,12 @@ export type PlanState = { plans: TrackedPlan[]; isPinned: boolean }
 /** Which view the pane shows, which phase the user moved the focus to (null follows the current phase), and when. */
 export type PlanView = { view: 'todo' | 'plan'; focus: number | null; pressedAt: number }
 
+/** A phase of the project roadmap (a Markdown table with a Status column) and its state. */
+export type RoadmapStatus = 'done' | 'active' | 'pending'
+export type RoadmapPhase = { name: string; status: RoadmapStatus }
+
 declare module 'claude-code' {
   interface PluginState {
-    'task-progress': { todos: Item[]; tasks: Item[]; startedAt: number; finishedAt: number; idleCalls: number; sessions: SessionRow[]; gauges: GaugeState | null; activity: Activity; repos: Repo[]; plan: PlanState | null; planView: PlanView }
+    'task-progress': { todos: Item[]; tasks: Item[]; startedAt: number; finishedAt: number; idleCalls: number; sessions: SessionRow[]; gauges: GaugeState | null; activity: Activity; repos: Repo[]; plan: PlanState | null; planView: PlanView; roadmap: RoadmapPhase[] }
   }
 }

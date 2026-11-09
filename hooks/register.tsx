@@ -1,11 +1,11 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { Activity, GaugeState, Item, PlanState, PlanView, Repo, SessionRow, TaskStatus, TrackedPlan } from '../types'
+import type { Activity, GaugeState, Item, PlanState, PlanView, Repo, RoadmapPhase, SessionRow, TaskStatus, TrackedPlan } from '../types'
 import { sceneCells } from './compositor'
 import { isOk, mark, parseProgressInput, present, summarize, withReminder } from './helpers'
 import { EMPTY_ACTIVITY, begin, callLabel, describeDoing, end, touchedDirectory } from './activity'
-import { CARD_PADDING, DEFAULT_COLUMNS, DEFAULT_SOUND_SECONDS, GAUGE_STALE_MS, GIT_POLL_MS, LIST_TOOLS, MAX_SOUND_SECONDS, MIN_SOUND_SECONDS, PLAN_MS, POLL_MS, PROGRESS_TOOL, STALE_CALLS, TELL_USAGE, USAGE_MS, USAGE_PROMPT } from './constants'
+import { CARD_PADDING, DEFAULT_COLUMNS, DEFAULT_SOUND_SECONDS, GAUGE_STALE_MS, GIT_POLL_MS, LIST_TOOLS, MAX_SOUND_SECONDS, MIN_SOUND_SECONDS, PLAN_MS, POLL_MS, PROGRESS_TOOL, PROGRESS_TOOL_SPEC, STALE_CALLS, TELL_USAGE, USAGE_MS, USAGE_PROMPT } from './constants'
 import { contextAlarm, formatGauges, freshLimitAlerts, limitName, resetText } from './gauges'
 import { CHROME_ROWS, DEFAULT_BODY_ROWS, MAX_SCENE_COLUMNS, litWindows, sceneLayout, stripRoom } from './layout'
 import { describeRow, layoutRow, newlyWaiting, parseTell, resolveTarget, visibleRows } from './overview'
@@ -13,13 +13,14 @@ import { MAX_BYTES, NO_ANNOUNCED, applyDoneRecent, currentPhase, freshPhases, is
 import type { Announced } from './plan'
 import { MAX_LIST_ROWS, phaseLines, phaseNumber, shownFocus, taskLines, toneColor } from './planview'
 import type { PlanLine } from './planview'
+import { roadmapLine, roadmapPaths, roadmapPhasesOf } from './roadmap'
 import { isAllDone, timingText } from './progress'
 import { applyReading, cacheRoot, repoLine, repoName, touchRepo, visibleRepos } from './repos'
 import type { RootCache } from './repos'
 import { playDone, soundPath } from './sound'
 import { COLORS, barParts, truncate } from './style'
 import { hasSessionIdChanged, pollSessions, publishProgress, removeRecord, resetSyncState } from './sync'
-import { findRoot, logOnce, readLedger, readStatus, readUsage, resetWatchState } from './watch'
+import { findRoot, logOnce, readLedger, readRoadmap, readStatus, readUsage, resetWatchState } from './watch'
 import { WINDOWS } from './world'
 
 const PANE = 'task-progress'
@@ -52,6 +53,9 @@ let seenPlans: readonly TrackedPlan[] = []
 let isPlanDirty = false
 /** Per tracked plan, its phase names and the phases complete at the last read (a phase is news only when it newly joins them). */
 let announced: Announced = NO_ANNOUNCED
+/** The session's working directory (a roadmap may sit in its plans directory) and the roadmap file and text last shown. */
+let projectCwd: string | undefined
+let roadmapSource = ''
 
 const todos = atom({ plugin: 'task-progress', key: 'todos' } as const, [] as Item[])
 const startedAt = atom({ plugin: 'task-progress', key: 'startedAt' } as const, 0)
@@ -63,6 +67,7 @@ const activity = atom({ plugin: 'task-progress', key: 'activity' } as const, EMP
 const repos = atom({ plugin: 'task-progress', key: 'repos' } as const, [] as Repo[])
 const gauges = atom({ plugin: 'task-progress', key: 'gauges' } as const, null as GaugeState | null)
 const planAtom = atom({ plugin: 'task-progress', key: 'plan' } as const, null as PlanState | null)
+const roadmapAtom = atom({ plugin: 'task-progress', key: 'roadmap' } as const, [] as RoadmapPhase[])
 const viewAtom = atom({ plugin: 'task-progress', key: 'planView' } as const, { view: 'todo', focus: null, pressedAt: 0 } as PlanView)
 
 let isPolling = false
@@ -241,6 +246,12 @@ async function readPlansOnce($: EngineInterface): Promise<void> {
     const done = await readLedger($, path)
     if (done !== undefined) await update($, planAtom, s => withLedgerState(s, path, done))
   }
+  const recent = [...plansOf(await read($, planAtom))].sort((a, b) => (b.lastTouchedAt ?? 0) - (a.lastTouchedAt ?? 0)).map(t => t.path)
+  // a roadmap no longer found keeps the last one shown, like a plan file
+  const found = await readRoadmap($, roadmapPaths(recent, projectCwd))
+  if (found === undefined || found.source === roadmapSource) return
+  roadmapSource = found.source
+  await update($, roadmapAtom, () => found.phases)
 }
 
 /** The tracked plan files are read; a request made during a read makes it run once more, so none is dropped. */
@@ -264,6 +275,8 @@ async function refreshPlan($: EngineInterface): Promise<void> {
   } finally {
     isReadingPlan = false
   }
+  // a touch after the last pass but before the flag was cleared would otherwise wait for the next poll
+  if (isPlanDirty) await refreshPlan($)
 }
 
 /** Raises one toast per phase that has just become complete; a plan's first read, or a change in its phase names, only sets its baseline. */
@@ -387,6 +400,8 @@ export const register: Register = (on, options) => {
   isReadingPlan = false
   isPlanDirty = false
   announced = NO_ANNOUNCED
+  projectCwd = undefined
+  roadmapSource = ''
   resetWatchState()
   resetSyncState()
   customSound = typeof options.soundFile === 'string' ? options.soundFile : ''
@@ -394,34 +409,13 @@ export const register: Register = (on, options) => {
   soundMs = Math.min(MAX_SOUND_SECONDS, Math.max(MIN_SOUND_SECONDS, seconds)) * 1000
 
   on('session.start', async ($, e, next) => {
+    projectCwd = e.cwd
     await $.command.register({
       name: 'task-progress',
       description: 'Show the task progress pane (todo/task list, percent done)',
     })
     void $.ui.open({ id: PANE, title: 'Task progress' })
-    await $.tool.register({
-      name: 'progress',
-      description:
-        'Shows the task list and progress in the user\'s task-progress pane. For any work of 2+ steps, call this first with the full ordered list, then again whenever a step starts (in_progress) or finishes (completed). Each call replaces the whole list. Keep exactly one task in_progress.',
-      inputSchema: {
-        type: 'object',
-        properties: {
-          tasks: {
-            type: 'array',
-            items: {
-              type: 'object',
-              properties: {
-                subject: { type: 'string' },
-                status: { type: 'string', enum: ['pending', 'in_progress', 'completed'] },
-              },
-              required: ['subject', 'status'],
-            },
-          },
-        },
-        required: ['tasks'],
-      },
-      isDeferred: false,
-    })
+    await $.tool.register(PROGRESS_TOOL_SPEC)
     await $.command.register({
       name: 'task-progress-tell',
       description: 'Send a message to another session: /task-progress-tell <session name> <message>',
@@ -608,6 +602,8 @@ export const register: Register = (on, options) => {
     const planTasks = plan === null ? 0 : plan.phases.reduce((sum, p) => sum + p.tasks.length, 0)
     const planDone = plan === null ? 0 : plan.phases.reduce((sum, p) => sum + phaseDoneCount(p), 0)
     const planPercent = planTasks === 0 ? 0 : Math.round((planDone / planTasks) * 100)
+    const roadmap = roadmapPhasesOf(await read($, roadmapAtom))
+    const roadmapRows = roadmap.length === 0 ? 0 : 1
 
     const available = Math.max(1, (e.props.bodyColumns ?? DEFAULT_COLUMNS + 2 * CARD_PADDING) - 2 * CARD_PADDING)
     const inner = Math.min(MAX_SCENE_COLUMNS, available)
@@ -673,9 +669,9 @@ export const register: Register = (on, options) => {
     })
     const moreLine = shownRepos.more > 0 ? <Text color={COLORS.muted}>+{shownRepos.more} repos</Text> : null
     const wanted = present([gaugeLine, doingLine, ...repoLines, moreLine])
-    const strip = wanted.slice(0, stripRoom(bodyRows, layout?.rows ?? 0, blockRows + (plan === null ? 0 : 1), wanted.length))
+    const strip = wanted.slice(0, stripRoom(bodyRows, layout?.rows ?? 0, blockRows + (plan === null ? 0 : 1) + roadmapRows, wanted.length))
     const stripBlock = <Box flexDirection="column">{strip}</Box>
-    const room = Math.max(1, bodyRows - CHROME_ROWS - (layout?.rows ?? 0) - blockRows - strip.length - (plan === null ? 0 : 1))
+    const room = Math.max(1, bodyRows - CHROME_ROWS - (layout?.rows ?? 0) - blockRows - strip.length - (plan === null ? 0 : 1) - roadmapRows)
     const shownItems = [
       ...items.filter(i => i.status === 'in_progress'),
       ...items.filter(i => i.status !== 'in_progress'),
@@ -691,6 +687,8 @@ export const register: Register = (on, options) => {
         {line.text}
       </Text>
     )
+    const roadmapShown = roadmapRows === 0 ? undefined : roadmapLine(roadmap, inner)
+    const roadmapRow = roadmapShown === undefined ? null : <Text color={roadmapShown.isDone ? COLORS.success : COLORS.accent}>{roadmapShown.text}</Text>
     const toggleRow =
       plan === null ? null : (
         <Box>
@@ -700,7 +698,7 @@ export const register: Register = (on, options) => {
     const current = plan === null ? 0 : currentPhase(plan)
     const focus = plan === null ? 0 : shownFocus(view.focus, view.pressedAt, now, current, plan.phases.length)
     // drawn: padding (2) + bar (1) + toggle row (1) + scene + sessions + strip; the header and the focus header are taken from this room
-    const planRoom = Math.max(1, bodyRows - 4 - (layout?.rows ?? 0) - blockRows - strip.length)
+    const planRoom = Math.max(1, bodyRows - 4 - (layout?.rows ?? 0) - blockRows - strip.length - roadmapRows)
     const listRows = plan === null ? 0 : Math.max(1, Math.min(MAX_LIST_ROWS, plan.phases.length, planRoom - 5))
     const headerPrefix = `${planPercent}%  ${planDone}/${planTasks} · `
     // one phase named like the plan: the header and the phase row show the name already
@@ -746,6 +744,7 @@ export const register: Register = (on, options) => {
           <Text color={barAccent}>{filled}</Text>
           <Text color={COLORS.track}>{rest}</Text>
         </Text>
+        {roadmapRow}
         {toggleRow}
         {isPlanView ? planBlock : total === 0 ? (
           <Box flexDirection="column">

@@ -75,6 +75,18 @@ Big plan   41/75  ▰▰▰▰▰▱▱▱
 - **Refresh:** every tracked file is read every 5 seconds and when the session touches it. A file that cannot be read keeps its last plan.
 - **Toast:** `Phase ③ Hook & git done (15/15)`, once per phase; phases already complete when a plan is first read are not announced.
 
+## Roadmap line
+
+When the project has a roadmap, one line under the progress bar shows it, in both views:
+
+```
+Roadmap 2/9  ✔P0 ✔P1 ▶P2a ○P2b ○P3 ○P4 ○Gate ○P5 ○P6+
+```
+
+- **Where it is looked for:** `roadmap.md` beside each tracked plan file (the one touched most recently first), then `<session cwd>/docs/superpowers/plans/roadmap.md`. The first that holds a roadmap table wins. It is read with the plans, every 5 seconds; a file that vanishes or stops parsing keeps the last line.
+- **How it is read:** the first Markdown table whose header has a `Status` (or `State`) column, outside code fences. Each row is a phase named by its first cell (emphasis, code ticks and link targets removed). `done`, `complete(d)`, `finished`, `shipped`, `✅`, `✔`, `x` count as done; `in_progress`, `in progress`, `active`, `wip`, `doing`, `current`, `started`, `🚧`, `▶` as current; anything else as waiting. At most 24 rows.
+- **Narrow panes:** when the phases do not fit, the line shrinks to `Roadmap 2/9 ▰▰▱▱▱▱▱▱ ▶ P2a` (the current phase, or the next one), cut to the width. The line turns green when every phase is done. Without a roadmap there is no line.
+
 ## Completion sound
 
 When every task in the list is completed, a short jingle plays once (`sounds/done.wav`). It uses the first player that works: `afplay` (macOS), then `pw-play`, `paplay`, `aplay`, `ffplay`. Options (`/config` or `pluginConfigs`):

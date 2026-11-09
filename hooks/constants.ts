@@ -22,3 +22,28 @@ export const TELL_USAGE = 'Usage: /task-progress-tell <session name> <message>'
 /** The tools that update the list: they reset the stale counter instead of counting. */
 export const LIST_TOOLS: readonly string[] = [PROGRESS_TOOL, 'TodoWrite', 'TaskCreate', 'TaskUpdate', 'TaskList']
 export const USAGE_PROMPT = `The user watches a live task-progress pane fed by the ${PROGRESS_TOOL} tool. For any work of 2 or more steps, call it first with the full ordered list, then call it again every time a step starts (in_progress) or finishes (completed) and whenever the plan changes, also in the middle of long runs of tool calls. Keep exactly one task in_progress. Keep every task as its own entry for the whole job: never merge finished tasks into one line and never rename them; a finished task stays in the list as completed, and each call changes statuses only, adding tasks at the end or in place. Never leave the list stale: when the work is done, mark every task completed. When you follow a plan file, tick its - [x] boxes as you finish each step, so the pane's plan view stays current.`
+
+/** The tool the model sends its task list to (registered at session start as `progress`). */
+export const PROGRESS_TOOL_SPEC = {
+  name: 'progress',
+  description:
+    'Shows the task list and progress in the user\'s task-progress pane. For any work of 2+ steps, call this first with the full ordered list, then again whenever a step starts (in_progress) or finishes (completed). Each call replaces the whole list. Keep exactly one task in_progress.',
+  inputSchema: {
+    type: 'object',
+    properties: {
+      tasks: {
+        type: 'array',
+        items: {
+          type: 'object',
+          properties: {
+            subject: { type: 'string' },
+            status: { type: 'string', enum: ['pending', 'in_progress', 'completed'] },
+          },
+          required: ['subject', 'status'],
+        },
+      },
+    },
+    required: ['tasks'],
+  },
+  isDeferred: false,
+} as const

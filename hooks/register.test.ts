@@ -2186,3 +2186,63 @@ test('two main-session calls at once at the 10th count: only the call that count
 
   expect(remindedAt(both.map(r => r.context))).toHaveLength(1)
 })
+
+const ROADMAP_TEXT = `# Roadmap
+
+| Phase | Goal | Status |
+|---|---|---|
+| P0 | Base | done |
+| P1 | Net | done |
+| P2a | Items | in_progress |
+| P2b | Demon | not_started |
+`
+
+test('a roadmap in the project shows its line in the todo view, without any plan', async ($, on) => {
+  const { clock, disk } = await planSetup($, on)
+  disk.put('/work/docs/superpowers/plans/roadmap.md', ROADMAP_TEXT)
+  await clock.advance(5000)
+  const ui = await mountPane($)
+  expect(await ui.find({ key: 'plan-toggle' })).toBeUndefined()
+  expect(await ui.find({ type: 'Text', text: /^Roadmap 2\/4 +✔P0 ✔P1 ▶P2a ○P2b$/ })).toBeDefined()
+  await ui.unmount()
+})
+
+test('a roadmap beside the tracked plan shows in both views and a vanished file keeps it', async ($, on) => {
+  const { clock, disk } = await planSetup($, on)
+  disk.put('/w/docs/plans/roadmap.md', ROADMAP_TEXT)
+  await readPlan($, clock)
+  disk.files.delete('/w/docs/plans/roadmap.md')
+  await clock.advance(5000)
+  const ui = await mountPane($)
+  expect(await ui.find({ type: 'Text', text: /^Roadmap 2\/4/ })).toBeDefined()
+  await ui.press({ key: 'plan-toggle' })
+  expect(await ui.find({ type: 'Text', text: /^Roadmap 2\/4/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /Phase 1: Base/ })).toBeDefined()
+  await ui.unmount()
+})
+
+test('no roadmap file means no roadmap line', async ($, on) => {
+  const { clock } = await planSetup($, on)
+  await readPlan($, clock)
+  await clock.advance(5000)
+  const ui = await mountPane($)
+  expect(await ui.find({ type: 'Text', text: /Roadmap/ })).toBeUndefined()
+  await ui.unmount()
+})
+
+test('a short pane with a roadmap still keeps a task row in both views', async ($, on) => {
+  const { clock, disk } = await planSetup($, on)
+  disk.put('/w/docs/plans/roadmap.md', ROADMAP_TEXT)
+  await $.tool.call({ tool: 'TodoWrite', todos: [{ content: 'only task', status: 'in_progress', activeForm: 'O' }] })
+  await readPlan($, clock)
+  const ui = await mountPlanPane($, 9)
+  expect(await ui.find({ type: 'Text', text: /^Roadmap/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /only task/ })).toBeDefined()
+  await ui.unmount()
+  const planUi = await mountPlanPane($, 12)
+  await planUi.press({ key: 'plan-toggle' })
+  expect(await planUi.find({ type: 'Text', text: /^Roadmap/ })).toBeDefined()
+  expect(await planUi.find({ type: 'Text', text: /Task 2: B/ })).toBeDefined()
+  expect(await textsOf(planUi, /^① Phase 1: Base +$/)).toBe(1)
+  await planUi.unmount()
+})
